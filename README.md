@@ -8,6 +8,8 @@ without asking engineering to build each one.
 **[Try the live demo](https://demo.rowfire.com)** on sample data: nothing to
 install, no accounts to connect. More at [rowfire.com](https://rowfire.com).
 
+![A first rule in the live demo: pick "a charge was declined", fire at most once a week per account, backtest it (211 declines become 92 messages), turn it on and watch messages arrive](docs/demo.gif)
+
 Engineering describes an event once, as a SQL query: *a charge was declined*,
 *an Enterprise account signed up*. From then on, whoever owns the workflow
 (support, billing, sales, growth, lifecycle) subscribes to it. They pick how often it may
