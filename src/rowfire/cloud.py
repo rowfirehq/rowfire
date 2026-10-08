@@ -1,7 +1,7 @@
-"""Running RowFire on a managed cloud platform (Render, for one).
+"""Running Rowfire on a managed cloud platform (Render, for one).
 
 A platform hands an app a database URL, a port and its public host name, and
-not much else. These commands turn that into everything RowFire needs, so the
+not much else. These commands turn that into everything Rowfire needs, so the
 platform's own config (render.yaml) stays a list of services:
 
     rowfire cloud predeploy   create schemas, migrate, seed the demo's data
@@ -18,8 +18,8 @@ One Postgres database holds everything, a schema each:
 
     demo      the public demo: a private workspace per visitor, sample data,
               actions delivered to the Demo inbox only
-    private   one team's own RowFire. Refused for now: on a cloud platform it
-              has a public address, and RowFire has no sign-in yet, so anyone
+    private   one team's own Rowfire. Refused for now: on a cloud platform it
+              has a public address, and Rowfire has no sign-in yet, so anyone
               who found it could connect databases and send messages.
 
 Anything already set in the environment wins over what is derived here, so a
@@ -72,7 +72,7 @@ def _with_user(url: str, user: str, password: str) -> str:
 
 
 def _master_key(raw: str) -> str:
-    """The master key as RowFire reads it: url-safe base64 of 32 bytes.
+    """The master key as Rowfire reads it: url-safe base64 of 32 bytes.
 
     A platform-generated secret is random but not necessarily that shape, so
     anything else is hashed down to 32 bytes. Deterministic, so every
@@ -106,7 +106,7 @@ def _examples_dir() -> Path:
 
 
 def settings(env: dict[str, str] | None = None) -> dict[str, str]:
-    """What RowFire's own settings should be, derived from the platform's."""
+    """What Rowfire's own settings should be, derived from the platform's."""
     env = dict(os.environ if env is None else env)
     database = env.get("DATABASE_URL", "")
     if not database:
@@ -116,7 +116,7 @@ def settings(env: dict[str, str] | None = None) -> dict[str, str]:
         raise CloudError(f"ROWFIRE_MODE must be one of {', '.join(MODES)}, got {mode!r}")
     if mode == "private":
         raise CloudError(
-            "ROWFIRE_MODE=private is not available yet. On a cloud platform RowFire has a "
+            "ROWFIRE_MODE=private is not available yet. On a cloud platform Rowfire has a "
             "public address, and it has no sign-in yet, so anyone who found it could "
             "connect databases and send messages. Run it inside your own network instead "
             "(see the README), or use ROWFIRE_MODE=demo."

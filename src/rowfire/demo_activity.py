@@ -1,6 +1,6 @@
 """Demo only: add a burst of activity to the *sample* database.
 
-RowFire never writes to a database it reads, and nothing here changes that.
+Rowfire never writes to a database it reads, and nothing here changes that.
 This is the "Simulate new activity" button in Get started, and it exists only
 when a deployment configures it with two settings:
 

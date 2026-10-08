@@ -1,4 +1,4 @@
-"""The databases RowFire reads from, and how each is opened read-only.
+"""The databases Rowfire reads from, and how each is opened read-only.
 
 A data source is a named DSN. Its scheme picks the driver:
 

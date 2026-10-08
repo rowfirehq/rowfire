@@ -1,11 +1,11 @@
-# Render Blueprint: the public RowFire demo.
+# Render Blueprint: the public Rowfire demo.
 #
 # One click on https://render.com/deploy?repo=https://github.com/rowfirehq/rowfire
 # creates everything below: the web app, the worker and a managed Postgres.
 # After that, every merge to main whose checks pass redeploys it. See
 # docs/hosting.md.
 #
-# Everything RowFire needs is derived from DATABASE_URL and the shared
+# Everything Rowfire needs is derived from DATABASE_URL and the shared
 # settings by `rowfire cloud` (src/rowfire/cloud.py), so this file stays a
 # list of services. Roughly $20/month: two Starter services and the
 # smallest Postgres.
@@ -17,10 +17,10 @@ envVarGroups:
   - name: rowfire-demo
     envVars:
       # `demo`: a private workspace per visitor, sample data, Demo inbox only.
-      # (`private`, one team's own instance, is refused until RowFire has sign-in.)
+      # (`private`, one team's own instance, is refused until Rowfire has sign-in.)
       - key: ROWFIRE_MODE
         value: demo
-      # Wraps every credential RowFire stores. Generated once by Render and
+      # Wraps every credential Rowfire stores. Generated once by Render and
       # shared by both services; never change it on a running deploy.
       - key: ROWFIRE_MASTER_KEY
         generateValue: true

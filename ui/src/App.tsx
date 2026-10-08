@@ -190,7 +190,7 @@ export function App() {
     // Only name the item when its page is what is actually on screen, not
     // while the link is held at Data sources.
     const named = shown === view ? [route.action, route.item] : [];
-    document.title = [...named, place?.title, "RowFire"].filter(Boolean).join(" · ");
+    document.title = [...named, place?.title, "Rowfire"].filter(Boolean).join(" · ");
   }, [route.action, route.item, place, shown, view]);
 
   return (
@@ -200,7 +200,7 @@ export function App() {
           <span className="brand-mark">
             <Logo />
           </span>
-          RowFire
+          Rowfire
         </div>
 
         <ul className="rail-nav">
@@ -272,7 +272,7 @@ export function App() {
           <div className="card">
             <h2>Nothing here</h2>
             <p className="hint">
-              <code>{window.location.pathname}</code> is not a page in RowFire.{" "}
+              <code>{window.location.pathname}</code> is not a page in Rowfire.{" "}
               <Link to={href(connected ? "rules" : "sources")} className="ref">
                 Go to {connected ? "Rules" : "Data sources"}
               </Link>

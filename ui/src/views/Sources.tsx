@@ -15,7 +15,7 @@ import { SchemaBrowser } from "../components/SchemaBrowser";
 import { href, navigate } from "../router";
 import { Review } from "../steps/Review";
 
-/* Data sources: the databases RowFire reads.
+/* Data sources: the databases Rowfire reads.
  *
  * Any number of them, Postgres or MySQL, each a named read-only connection.
  * A trigger names the one it reads; a trigger that names none reads the
@@ -106,7 +106,7 @@ export function Sources({
         </div>
         {fixed && (
           <p className="hint">
-            The demo's sample databases. To connect your own, run RowFire yourself.
+            The demo's sample databases. To connect your own, run Rowfire yourself.
           </p>
         )}
 
@@ -192,7 +192,7 @@ export function Sources({
             <div className="card">
               <h2>Data sources</h2>
               <p className="hint">
-                A <strong>data source</strong> is a database RowFire reads, through a
+                A <strong>data source</strong> is a database Rowfire reads, through a
                 read-only connection: PostgreSQL or MySQL, as many as you need. Each
                 trigger names the source its query runs against, so one rule can
                 watch your orders in Postgres while another watches tickets in MySQL.

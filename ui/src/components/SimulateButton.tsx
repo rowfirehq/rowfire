@@ -5,7 +5,7 @@ import { ApiError, api } from "../api";
 /* "Simulate new activity": a burst of rows in the sample database.
  *
  * Only rendered where the server says it is configured -- a demo deployment.
- * RowFire never writes to a database it reads; this runs a fixed script
+ * Rowfire never writes to a database it reads; this runs a fixed script
  * through a separate login the demo provides, and polls straight after, so
  * whatever it sets off shows up in seconds.
  */

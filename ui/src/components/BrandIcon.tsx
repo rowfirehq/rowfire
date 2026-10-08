@@ -51,7 +51,7 @@ const LETTERED: Record<string, { title: string; color: string; letter: string }>
   braze: { title: "Braze", color: "#3b2f63", letter: "B" },
 };
 
-/** RowFire's own Demo inbox: a tray, in the page's accent rather than a brand's. */
+/** Rowfire's own Demo inbox: a tray, in the page's accent rather than a brand's. */
 const TRAY = {
   title: "Demo inbox",
   color: "#6e56cf",

@@ -1,4 +1,4 @@
-# RowFire
+# Rowfire
 
 **The events your app never emitted.** Turn what happens in your database into
 events your tools act on: Slack messages and Zendesk tickets for your team,
@@ -65,7 +65,7 @@ stream, so it can fire on:
 ### What it is not
 
 - **Not ETL or reverse ETL.** Reverse ETL syncs state, keeping a field equal to
-  a column. RowFire emits moments: this just became true for this key, so act
+  a column. Rowfire emits moments: this just became true for this key, so act
   once, at the cadence the rule allows.
 - **Not CDC or streaming.** Triggers are polled, within a minute by default.
 - **Not for messages that must arrive instantly.** It is built for reactions
@@ -433,7 +433,7 @@ Vite proxies `/api` to the Python server, so the browser still sees one origin.
 
 ## Data sources
 
-A **data source** is a database RowFire reads: a name, and a read-only DSN
+A **data source** is a database Rowfire reads: a name, and a read-only DSN
 stored encrypted. There can be any number, on either engine:
 
 | engine | DSN | driver |

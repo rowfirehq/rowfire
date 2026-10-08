@@ -128,7 +128,7 @@ function Message({ item }: { item: InboxItem }) {
       </div>
       <div className="inbox-content">
         <div className="inbox-head">
-          <strong>RowFire</strong>
+          <strong>Rowfire</strong>
           <span className="inbox-app">APP</span>
           <span className="inbox-channel">{text(body.channel) || "#general"}</span>
         </div>

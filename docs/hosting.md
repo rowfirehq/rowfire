@@ -1,6 +1,6 @@
 # Hosting the public demo
 
-A public RowFire demo that anyone can open with a link: no install, no
+A public Rowfire demo that anyone can open with a link: no install, no
 account, no waiting for a container to build. Each visitor gets a private
 workspace of their own, and every merge to `main` updates it by itself.
 
@@ -63,7 +63,7 @@ timestamps stay recent. Visitors' workspaces survive deploys.
 | worker (`rowfire-demo-worker`) | Starter | $7/month |
 | Postgres (`rowfire-db`) | Basic 256 MB, 1 GB disk | about $6.30/month |
 
-The database holds everything, a schema each: `rowfire_platform` for RowFire
+The database holds everything, a schema each: `rowfire_platform` for Rowfire
 itself, `sample` for the template, and `visitor_*` for each visitor's copy.
 It accepts connections only from the two services (`ipAllowList: []`).
 
@@ -71,7 +71,7 @@ It accepts connections only from the two services (`ipAllowList: []`).
 
 - *A custom domain* such as `demo.example.com`: add it under the web
   service's **Settings → Custom Domains**, and set `ROWFIRE_PUBLIC_HOSTNAME`
-  to it in the `rowfire-demo` environment group so RowFire accepts it. Point
+  to it in the `rowfire-demo` environment group so Rowfire accepts it. Point
   a `CNAME` at the service's `onrender.com` address. On Cloudflare, leave it
   **DNS only** (grey cloud): proxied, or before the domain is added on
   Render, it fails with Cloudflare's *Error 1000, DNS points to prohibited
@@ -164,7 +164,7 @@ pointing at GitHub Discussions by default.
 analytics tag, so it lives in your instance's environment rather than in the
 repository. On Render, set it in the `rowfire-demo` environment group; here,
 in `deploy/hosted/.env`. Unset, the page is served exactly as built, which is
-how every self-hosted instance starts: RowFire itself tracks nothing. The value
+how every self-hosted instance starts: Rowfire itself tracks nothing. The value
 goes into the page verbatim, so treat it like any other code you deploy, and
 tell your visitors what it collects.
 
@@ -187,5 +187,5 @@ tell your visitors what it collects.
 ## The website
 
 [rowfire.com](https://rowfire.com) is a static page kept in its own
-repository and hosted on Cloudflare Pages. It is not part of RowFire and
+repository and hosted on Cloudflare Pages. It is not part of Rowfire and
 nothing here builds or serves it.

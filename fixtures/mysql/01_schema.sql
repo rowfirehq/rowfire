@@ -23,7 +23,7 @@ CREATE TABLE tickets (
     priority          ENUM('low', 'normal', 'high', 'urgent') NOT NULL DEFAULT 'normal',
     status            VARCHAR(20) NOT NULL,
     channel           VARCHAR(20) NOT NULL,
-    -- Stored as UTC wall-clock time, which is what RowFire assumes of a
+    -- Stored as UTC wall-clock time, which is what Rowfire assumes of a
     -- DATETIME: the column itself carries no zone.
     created_at        DATETIME NOT NULL,
     first_response_at DATETIME NULL,

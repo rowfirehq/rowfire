@@ -468,7 +468,7 @@ export function Start({ onConnected }: { onConnected: (has: boolean) => void }) 
         }
       >
         <p className="hint">
-          RowFire reads a database and never writes to it. Start with the sample one: a small SaaS
+          Rowfire reads a database and never writes to it. Start with the sample one: a small SaaS
           company with accounts, billing, trials and an NPS survey.
         </p>
         {suggested.length > 0 ? (
