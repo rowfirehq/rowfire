@@ -1,0 +1,6 @@
+# HTTPS for the demo. Caddy fetches and renews the certificate for $DOMAIN
+# by itself, as long as DNS points at this server and ports 80/443 are open.
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy ui:8000
+}

@@ -1,0 +1,179 @@
+# Definitions for the SaaS demo database (examples/saas).
+#
+# Business events across two databases -- the app's Postgres and the support
+# desk's MySQL -- written as plain SQL, and the rules that act on them through
+# Slack and Zendesk. See the "Demo" section of the README.
+version: 2
+
+source:
+  type: postgres
+  dsn_env: DATABASE_URL
+  statement_timeout_ms: 30000
+  max_rows: 50000
+
+triggers:
+  # Every declined charge, retries included. Keyed by account: whoever wrote
+  # the query knows that three declines on one invoice are one problem.
+  payment_failed:
+    description: A charge was declined
+    sql: |
+      SELECT a.id          AS account_id,
+             a.name        AS account,
+             a.owner_name,
+             a.owner_email,
+             p.name        AS plan,
+             pa.invoice_no,
+             pa.amount,
+             pa.attempt,
+             pa.decline_code,
+             pa.attempted_at
+      FROM payment_attempts pa
+      JOIN accounts a ON a.id = pa.account_id
+      JOIN plans p    ON p.id = a.plan_id
+      WHERE pa.outcome = 'failed'
+        AND a.is_internal = false
+    event_time: attempted_at
+    key: [account_id]
+
+  # A big logo signed up. Written the way most people would first write it:
+  # it forgets internal QA tenants, which are Enterprise too. Backtest it next
+  # to the one below and the difference is the noise #sales would have got.
+  enterprise_signup:
+    description: An account signed up on the Enterprise plan
+    sql: |
+      SELECT a.id AS account_id,
+             a.name AS account,
+             a.domain,
+             a.seats,
+             a.region,
+             a.owner_name,
+             a.owner_email,
+             a.created_at
+      FROM accounts a
+      JOIN plans p ON p.id = a.plan_id
+      WHERE p.name = 'Enterprise'
+    event_time: created_at
+    key: [account_id]
+
+  enterprise_signup_real:
+    description: An Enterprise sign-up, excluding internal tenants
+    sql: |
+      SELECT a.id AS account_id,
+             a.name AS account,
+             a.domain,
+             a.seats,
+             a.region,
+             a.owner_name,
+             a.owner_email,
+             a.created_at
+      FROM accounts a
+      JOIN plans p ON p.id = a.plan_id
+      WHERE p.name = 'Enterprise'
+        AND a.is_internal = false
+    event_time: created_at
+    key: [account_id]
+
+  # The clock does not have to be a column: three days before a trial ends,
+  # computed in the query.
+  trial_stalled:
+    description: A trial ends in three days and the account never activated
+    sql: |
+      SELECT a.id AS account_id,
+             a.name AS account,
+             a.owner_name,
+             a.owner_email,
+             a.trial_ends_at,
+             a.trial_ends_at - interval '3 days' AS nudge_at
+      FROM accounts a
+      JOIN plans p ON p.id = a.plan_id
+      WHERE p.name = 'Trial'
+        AND a.activated_at IS NULL
+        AND a.is_internal = false
+    event_time: nudge_at
+    key: [account_id]
+
+  nps_detractor:
+    description: A customer scored us 6 or below
+    sql: |
+      SELECT r.id AS response_id,
+             a.id AS account_id,
+             a.name AS account,
+             p.name AS plan,
+             r.respondent,
+             r.score,
+             r.comment,
+             r.submitted_at
+      FROM nps_responses r
+      JOIN accounts a ON a.id = r.account_id
+      JOIN plans p    ON p.id = a.plan_id
+      WHERE r.score <= 6
+        AND a.is_internal = false
+    event_time: submitted_at
+    key: [account_id]
+
+  # A second data source: the support desk lives in MySQL, not in the app's
+  # Postgres. `source: support` is all it takes -- the query is checked and
+  # run in MySQL's dialect, against that database. Add the source under
+  # Data sources (the demo button names it `support`).
+  urgent_ticket_unanswered:
+    description: An urgent ticket has had no first response
+    source: support
+    sql: |
+      SELECT t.id,
+             t.subject,
+             t.requester_email,
+             t.channel,
+             t.created_at
+      FROM tickets t
+      WHERE t.priority = 'urgent'
+        AND t.first_response_at IS NULL
+        AND t.is_spam = 0
+    event_time: created_at
+    key: [id]
+
+rules:
+  # One trigger, two cadences: billing wants a ticket per account per week,
+  # the channel wants a heads-up at most once a day per account.
+  billing_ticket:
+    trigger: payment_failed
+    description: Open a Zendesk ticket for billing, at most once a week per account
+    policy: once_per_period
+    period: week
+
+  billing_heads_up:
+    trigger: payment_failed
+    description: "Tell #billing, at most once a day per account"
+    policy: once_per_period
+    period: day
+
+  announce_enterprise_signup:
+    trigger: enterprise_signup_real
+    description: "Post every new Enterprise account to #sales"
+    policy: once_ever
+
+  announce_enterprise_signup_naive:
+    trigger: enterprise_signup
+    description: The same, without excluding internal tenants -- for comparison
+    policy: once_ever
+
+  rescue_stalled_trial:
+    trigger: trial_stalled
+    description: Ask customer success to reach out before the trial ends
+    policy: once_ever
+
+  detractor_follow_up:
+    trigger: nps_detractor
+    description: One support ticket per unhappy account per month
+    policy: once_per_period
+    period: month
+
+  detractor_to_slack:
+    trigger: nps_detractor
+    description: "Share detractor comments in #customer-voice, at most one per account a day"
+    policy: once_per_period
+    period: day
+
+  escalate_unanswered_urgent:
+    trigger: urgent_ticket_unanswered
+    description: "Tell #support about every urgent ticket nobody has answered"
+    policy: once_ever

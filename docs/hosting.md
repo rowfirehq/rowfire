@@ -1,0 +1,199 @@
+# Hosting the public demo
+
+A public RowFire demo that anyone can open with a link: no install, no
+account, no waiting for a container to build. Each visitor gets a private
+workspace of their own, and every merge to `main` updates it by itself.
+
+There are two ways to run it:
+
+- **[On Render](#on-render-recommended)**: managed Postgres with backups,
+  HTTPS and deploys handled for you. About $20 a month, and nothing to
+  maintain. Recommended.
+- **[On your own server](#on-your-own-server)**: one VM running
+  `docker compose`. €0–5 a month, but the server, its updates and its
+  backups are yours to look after.
+
+## What a visitor gets, and what keeps it safe
+
+On their first visit the app makes them a **workspace**: their own rules,
+integrations, Demo inbox and history, plus **their own copy of the sample
+Postgres tables** (a schema of their own), so *Simulate new activity* fires
+their rules and nobody else's. A signed, HttpOnly cookie is the only thing
+that names it. After `ROWFIRE_WORKSPACE_IDLE_HOURS` (24 by default) without a
+visit, the worker deletes the workspace, its history and its copy of the
+data.
+
+A public instance is a different risk from a local one, so `ROWFIRE_HOSTED=1`
+turns on a set of locks (`src/rowfire/hosted.py`):
+
+| risk | what stops it |
+| --- | --- |
+| A visitor points the server at an address of their choosing | Data sources are fixed to the sample databases; adding or replacing one is refused. |
+| An integration used to call other sites, or the cloud's metadata endpoint | `ROWFIRE_EGRESS=inbox-only`: only the Demo inbox can be delivered to. |
+| One visitor reading or changing another's work | Every query and every lookup by id is scoped to the visitor's workspace. Sample data is per visitor. |
+| A page on another site using a visitor's cookie | `SameSite=Lax`, and state-changing requests from another origin are refused. |
+| Expensive queries | A 10-second statement timeout on every visitor's queries. |
+| Floods | A cap on live workspaces (`ROWFIRE_MAX_WORKSPACES`, 200) and on new sessions per address per hour. |
+
+Trigger SQL still runs, because writing it is the point. It runs as a
+read-only login against sample data only.
+
+## On Render (recommended)
+
+`render.yaml` describes the whole demo: the web app, the worker and a managed
+Postgres, in Frankfurt. Render reads it and creates all three.
+
+**1. Create it.** Open
+<https://render.com/deploy?repo=https://github.com/rowfirehq/rowfire>,
+sign in with GitHub, add a payment method (always-on services are not on the
+free tier), and approve the plan. The first deploy builds the image and
+takes about ten minutes. Render generates the master key itself.
+
+**2. Open it.** The web service's page shows its address,
+`https://rowfire-demo.onrender.com` or similar. The first visit makes a
+workspace and lands on **Get started**.
+
+That's all. From then on every merge to `main` redeploys both services once
+CI has passed on it, and each deploy reseeds the sample data so its
+timestamps stay recent. Visitors' workspaces survive deploys.
+
+| what | Render plan | about |
+| --- | --- | --- |
+| web app (`rowfire-demo`) | Starter | $7/month |
+| worker (`rowfire-demo-worker`) | Starter | $7/month |
+| Postgres (`rowfire-db`) | Basic 256 MB, 1 GB disk | about $6.30/month |
+
+The database holds everything, a schema each: `rowfire_platform` for RowFire
+itself, `sample` for the template, and `visitor_*` for each visitor's copy.
+It accepts connections only from the two services (`ipAllowList: []`).
+
+**Optional:**
+
+- *A custom domain* such as `demo.example.com`: add it under the web
+  service's **Settings → Custom Domains**, and set `ROWFIRE_PUBLIC_HOSTNAME`
+  to it in the `rowfire-demo` environment group so RowFire accepts it. Point
+  a `CNAME` at the service's `onrender.com` address. On Cloudflare, leave it
+  **DNS only** (grey cloud): proxied, or before the domain is added on
+  Render, it fails with Cloudflare's *Error 1000, DNS points to prohibited
+  IP*.
+- *A spending notification* under **Billing**, so a burst of traffic
+  cannot surprise you.
+
+**If a deploy fails,** the web service's **Events** tab shows which step.
+`rowfire cloud predeploy` names what it could not do. The likeliest is the
+database user lacking `CREATEROLE`, which the demo needs for the read-only
+role visitors' queries run as.
+
+**What not to change:** `ROWFIRE_MASTER_KEY`, once the demo is running.
+Every stored credential is encrypted under it. Visitors' workspaces would
+become unreadable, and the only fix is wiping them.
+
+## On your own server
+
+You need a Linux server with Docker, a domain name (or subdomain) and about
+fifteen minutes.
+
+### One-time setup
+
+**1. A server.** Any small VM works. 2 vCPU and 4 GB of RAM is plenty.
+
+- *Hetzner* CX22 or similar, about €4–5 a month. Simplest.
+- *Oracle Cloud* "Always Free" Ampere (ARM) VM, $0. The image is published
+  for ARM as well as x86. Open ports 80 and 443 in the VCN security list as
+  well as on the VM's own firewall.
+
+Install Docker (`curl -fsSL https://get.docker.com | sh`) and add your deploy
+user to the `docker` group.
+
+**2. DNS.** Point an `A` record (and `AAAA` for IPv6) for your demo's name,
+say `demo.example.com`, at the server. Caddy gets the HTTPS certificate by
+itself once DNS resolves.
+
+**3. The code and settings.**
+
+```bash
+sudo git clone https://github.com/rowfirehq/rowfire /opt/rowfire
+sudo chown -R "$USER" /opt/rowfire
+cd /opt/rowfire
+cp deploy/hosted/.env.example deploy/hosted/.env
+# Set DOMAIN, and generate the master key:
+#   openssl rand -base64 32 | tr '+/' '-_'
+nano deploy/hosted/.env
+docker compose -f deploy/hosted/compose.yaml --env-file deploy/hosted/.env up -d
+```
+
+Open `https://<your domain>`. The first visit makes a workspace and lands on
+**Get started**.
+
+**4. Make the image public.** On GitHub: **Packages → rowfire → Package
+settings → Change visibility → Public**. The server pulls it without logging
+in.
+
+**5. Deploy on every merge.** In the repository's **Settings → Secrets and
+variables → Actions**, add:
+
+| secret | value |
+| --- | --- |
+| `DEMO_SSH_HOST` | the server's address |
+| `DEMO_SSH_USER` | the user that owns `/opt/rowfire` and can run docker |
+| `DEMO_SSH_KEY` | a private key made for this, e.g. `ssh-keygen -t ed25519 -f demo_deploy -N ""`, with `demo_deploy.pub` added to that user's `~/.ssh/authorized_keys` |
+| `DEMO_SSH_KNOWN_HOSTS` | the output of `ssh-keyscan <server address>`, so the workflow checks it is talking to your server |
+
+From then on, `.github/workflows/deploy-demo.yml` runs after every image
+published from `main`. It moves the checkout to `origin/main`, pulls the new
+image and restarts what changed. You can also run it by hand from the
+**Actions** tab. Until the secrets exist it skips with a notice instead of
+failing.
+
+### Running it
+
+```bash
+cd /opt/rowfire
+C="docker compose -f deploy/hosted/compose.yaml --env-file deploy/hosted/.env"
+
+$C ps                    # what is running
+$C logs -f ui worker     # the server, and the worker polling and reaping
+$C down && $C up -d      # restart everything; visitors' workspaces survive
+$C down -v               # wipe everything, every visitor's workspace included
+```
+
+`ROWFIRE_FEEDBACK_URL` puts a **Give feedback** button in the demo's banner,
+pointing at GitHub Discussions by default.
+
+## What it does not do yet
+
+- **Visitors are anonymous.** Their workspace lives in one browser. There
+  are no accounts, so there is no way back to it from another device. That
+  is the next step towards a hosted product, and it sits on top of the
+  workspaces this already has.
+- **One read-only login for every visitor's queries.** Each visitor's
+  triggers read their own copy of the tables by default, but a hand-written
+  query could name another visitor's schema and read it. Those copies hold
+  only generated sample data, and nothing a visitor types is ever written
+  into them, so there is nothing personal to read. A role per visitor would
+  close it if that ever changes.
+- **One server.** The worker serves every workspace in turn, which is plenty
+  for a demo. For more, run more workers: `$C up -d --scale worker=3`. They
+  coordinate through the database.
+
+## The website
+
+[rowfire.com](https://rowfire.com) is the static page in [`site/`](../site):
+one HTML file, its images and the favicon, with no build step. It is hosted
+on Cloudflare Pages as the project `rowfire`, connected to this
+repository, with `rowfire.com` attached under **Custom domains**.
+
+Every merge to `main` that changes `site/` publishes it; the project's
+**Build watch paths** limit it to `site/*`. A pull request that changes it
+gets a preview link from Cloudflare. The project builds nothing: no
+framework preset, no build command, output directory `site`.
+
+To preview it locally:
+
+```bash
+python3 -m http.server 4173 --directory site
+```
+
+The screenshots in `site/img/` are crops of the ones in `docs/screenshots/`.
+Retake those and crop again when the UI changes, so the page shows the
+product as it is.

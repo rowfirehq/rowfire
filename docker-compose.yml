@@ -1,0 +1,179 @@
+services:
+  # Fixture database. Deliberately has NO named volume: `docker compose down`
+  # discards it, so every fresh `up` re-runs schema.sql + seed.sql from
+  # /docker-entrypoint-initdb.d (which executes files in alphabetical order,
+  # hence schema -> seed -> zz_roles).
+  postgres:
+    # Pinned to 15 because it is what is cached locally and the registry is
+    # unreachable from this network. Nothing here needs 16.
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: rowfire
+      POSTGRES_PASSWORD: rowfire
+      POSTGRES_DB: rowfire_fixture
+    ports:
+      # Host 5433 by default -- 5432 is commonly occupied by another project.
+      # Override with ROWFIRE_PG_PORT if you need something else.
+      - "${ROWFIRE_PG_PORT:-5433}:5432"
+    volumes:
+      - ./fixtures:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rowfire -d rowfire_fixture"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # A second data source, on the other engine: a small MySQL support desk.
+  # Like `postgres`, it has no volume, so every fresh `up` reseeds it from
+  # fixtures/mysql. The UI offers it as a one-click second source.
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: rowfire
+      MYSQL_DATABASE: rowfire_support
+      # The seed is relative to UTC_TIMESTAMP(); the server zone only matters
+      # for NOW(), but keep everything in one zone anyway.
+      TZ: UTC
+    ports:
+      # 3306 is often taken by a local MySQL; override with ROWFIRE_MYSQL_PORT.
+      - "${ROWFIRE_MYSQL_PORT:-3307}:3306"
+    volumes:
+      - ./fixtures/mysql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # Over TCP on purpose: the image's init step runs a temporary server
+      # with networking off, so this only passes once seeding has finished.
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -prowfire --silent"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  # Dev convenience: run the CLI against the fixture DB inside the compose
+  # network. Note it connects as rowfire_ro, the SELECT-only role, so the
+  # read-only guarantees get exercised the way a customer would grant them.
+  # The platform's OWN database -- the control plane. Distinct from `postgres`
+  # above in every way that matters: that one stands in for a customer's
+  # production database and is only ever read; this one we own and write to.
+  #
+  # Unlike the fixture, this keeps a named volume: migrations and the fire
+  # ledger are meant to survive `docker compose down`.
+  controlplane:
+    # 15 locally only because the registry is unreachable from this network
+    # and it is what is cached. Nothing in the control-plane schema needs 16 --
+    # target 16+ in production regardless.
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: rowfire
+      POSTGRES_PASSWORD: rowfire
+      POSTGRES_DB: rowfire_platform
+    ports:
+      - "${ROWFIRE_CP_PORT:-5434}:5432"
+    volumes:
+      - controlplane-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rowfire -d rowfire_platform"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # The demo surface. Binds 0.0.0.0 *inside the container only*; the published
+  # port is pinned to the host's 127.0.0.1, so it is not reachable from the
+  # network. The API additionally rejects any request whose Host header is not
+  # loopback, which is what stops a web page the user visits from driving it.
+  # One-shot: migrate the control plane, then seed it from definitions.yaml if
+  # it is empty. Everything else waits for this to exit 0.
+  #
+  # This exists because the control plane is now the only store. Without it a
+  # fresh `docker compose up` would bring up a UI whose every panel reports a
+  # missing table, which is a miserable first five minutes. `--if-empty` makes
+  # it idempotent, so it is safe on every subsequent `up` too: the file seeds a
+  # blank install and is never read again.
+  init:
+    build: .
+    image: rowfire
+    depends_on:
+      controlplane:
+        condition: service_healthy
+    environment:
+      ROWFIRE_PLATFORM_DSN: postgresql+psycopg://rowfire:rowfire@controlplane:5432/rowfire_platform
+      ROWFIRE_MASTER_KEY: ${ROWFIRE_MASTER_KEY:?set it from rowfire platform init-key}
+    volumes:
+      # Read-only, and read exactly once: this is an import artifact, not the
+      # store of record. `rowfire platform pull` is the way back out.
+      - ./definitions.yaml:/work/definitions.yaml:ro
+    working_dir: /work
+    entrypoint: ["sh", "-c"]
+    command:
+      - "alembic -c /app/alembic.ini upgrade head && rowfire platform push -f definitions.yaml --if-empty --note 'compose seed'"
+    restart: "no"
+
+  ui:
+    build: .
+    image: rowfire
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      controlplane:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    environment:
+      # Offered as one-click shortcuts on the Data sources screen. These are
+      # the addresses the *server* uses, which inside the compose network are
+      # the service names -- not the host's published ports.
+      ROWFIRE_DEMO_DSN: postgresql://rowfire_ro:rowfire_ro@postgres:5432/rowfire_fixture
+      ROWFIRE_DEMO_MYSQL_DSN: mysql://rowfire_ro:rowfire_ro@mysql:3306/rowfire_support
+      # Both are required: the control plane is the only store, and the
+      # server refuses to start without one.
+      ROWFIRE_PLATFORM_DSN: postgresql+psycopg://rowfire:rowfire@controlplane:5432/rowfire_platform
+      ROWFIRE_MASTER_KEY: ${ROWFIRE_MASTER_KEY:?set it from rowfire platform init-key}
+    ports:
+      - "127.0.0.1:${ROWFIRE_UI_PORT:-8000}:8000"
+    working_dir: /work
+    entrypoint: ["rowfire"]
+    command:
+      ["serve", "--host", "0.0.0.0", "--port", "8000", "--allow-non-loopback"]
+
+  # The polling worker. Its own container rather than a thread in the API, so
+  # a hung poll cannot take the UI down with it, and so scaling it is just
+  # `--scale worker=N` -- SKIP LOCKED means the replicas need no coordination.
+  worker:
+    build: .
+    image: rowfire
+    depends_on:
+      controlplane:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    environment:
+      ROWFIRE_PLATFORM_DSN: postgresql+psycopg://rowfire:rowfire@controlplane:5432/rowfire_platform
+      # Losing this makes every stored credential unrecoverable. Injected from
+      # the host so it is never baked into an image layer.
+      ROWFIRE_MASTER_KEY: ${ROWFIRE_MASTER_KEY:?set it from rowfire platform init-key}
+    entrypoint: ["rowfire"]
+    command: ["worker", "--interval", "5"]
+    restart: unless-stopped
+
+  cli:
+    build: .
+    # Same tag the README's `docker build -t rowfire .` produces, so compose
+    # and a hand build cannot drift into two images with one name.
+    image: rowfire
+    depends_on:
+      postgres:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    environment:
+      # The fallback for a cold install. Once `connect` has stored one, the
+      # encrypted connection in the control plane wins over this.
+      DATABASE_URL: postgresql://rowfire_ro:rowfire_ro@postgres:5432/rowfire_fixture
+      ROWFIRE_PLATFORM_DSN: postgresql+psycopg://rowfire:rowfire@controlplane:5432/rowfire_platform
+      ROWFIRE_MASTER_KEY: ${ROWFIRE_MASTER_KEY:?set it from rowfire platform init-key}
+    working_dir: /work
+    entrypoint: ["rowfire"]
+    command: ["--help"]
+
+volumes:
+  controlplane-data:

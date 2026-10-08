@@ -1,0 +1,118 @@
+# Definitions for the fixture marketplace database.
+#
+# A trigger is a SELECT describing when something happened. It joins whatever
+# it needs -- which is why there is no separate enrichment step: a joined
+# column is just a column, available to every template.
+#
+# `key` is the grain: which output columns identify one row. The person who
+# wrote the query is the only one who reliably knows that, which is why it
+# lives here and not on the rules.
+version: 2
+
+source:
+  type: postgres
+  dsn_env: DATABASE_URL
+  statement_timeout_ms: 30000
+  max_rows: 50000
+
+triggers:
+  # Written exactly as a technical user would reach for it first -- and subtly
+  # wrong. Status 7 (auto_completed) also means done, so this silently misses
+  # every auto-completed order. Backtest it against the one below to see.
+  order_completed:
+    description: An order finished and was paid for
+    sql: |
+      SELECT o.id,
+             o.customer_id,
+             o.status,
+             o.total_amount,
+             o.completed_at,
+             c.first_name,
+             c.phone,
+             c.city
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      WHERE o.status = 4
+        AND o.paid_at IS NOT NULL
+        AND o.is_test = false
+    event_time: completed_at
+    key: [id]
+
+  # The same event, correct. The counts differ by the auto-completed orders.
+  order_completed_inclusive:
+    description: An order finished and was paid for, including auto-completion
+    sql: |
+      SELECT o.id,
+             o.customer_id,
+             o.status,
+             o.total_amount,
+             o.completed_at,
+             c.first_name,
+             c.phone,
+             c.city
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      WHERE o.status IN (4, 7)
+        AND o.paid_at IS NOT NULL
+        AND o.is_test = false
+    event_time: completed_at
+    key: [id]
+
+  # A different grain on the same tables: one row per customer per order, keyed
+  # by customer. Rules on this dedup per customer, not per order.
+  customer_ordered:
+    description: A customer completed an order
+    sql: |
+      SELECT c.id AS customer_id,
+             c.first_name,
+             c.phone,
+             c.city,
+             o.id AS order_id,
+             o.total_amount,
+             o.completed_at
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      WHERE o.status IN (4, 7)
+        AND o.paid_at IS NOT NULL
+        AND o.is_test = false
+    event_time: completed_at
+    key: [customer_id]
+
+  worker_activated:
+    description: A worker became active
+    sql: |
+      SELECT id, full_name, phone, city, activated_at
+      FROM workers
+      WHERE status = 2 AND activated_at IS NOT NULL
+    event_time: activated_at
+    key: [id]
+
+rules:
+  # Two rules on one trigger, different cadence -- which is why the policy
+  # lives here and the key lives on the trigger.
+  tell_ops_every_completed_order:
+    trigger: order_completed
+    description: Post every completed order to the ops channel
+    policy: once_ever
+
+  compare_inclusive:
+    trigger: order_completed_inclusive
+    description: The same event done correctly, for comparison
+    policy: once_ever
+
+  thank_the_customer_weekly:
+    trigger: customer_ordered
+    description: At most one message per customer per week
+    policy: once_per_period
+    period: week
+
+  welcome_new_worker:
+    trigger: worker_activated
+    description: Greet a worker the first time they go active
+    policy: once_ever
+
+  nudge_ops_daily:
+    trigger: customer_ordered
+    description: Same trigger, different cadence -- proves policy is per rule
+    policy: once_per_period
+    period: day

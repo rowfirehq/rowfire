@@ -1,0 +1,47 @@
+# Slack, via the Web API.
+#
+# Nothing in this file is privileged. It is loaded, validated and executed by
+# exactly the same code as an integration someone defines in the UI for their
+# own API -- if Slack needed special-casing in Python, the claim that anyone
+# can add their own integration would not survive contact with the second one.
+name: slack
+description: Slack Web API
+base_url: https://slack.com/api
+timeout_ms: 10000
+
+# What this integration needs before it can authenticate. The UI builds its
+# form from here, which is why the labels are written for a person.
+credentials:
+  bot_token:
+    label: Bot user OAuth token
+    help: From your Slack app's OAuth & Permissions page. Starts with xoxb-.
+    secret: true
+
+auth:
+  kind: bearer
+  credential: bot_token
+
+actions:
+  send_message:
+    description: Post a message to a channel
+    method: POST
+    path: /chat.postMessage
+    # What whoever attaches this action has to supply. Declared rather than
+    # inferred from the body below, so the rule screen can ask for it properly
+    # -- with a label, a type and a hint -- instead of showing a bare text box
+    # named after a placeholder.
+    parameters:
+      channel:
+        label: Channel
+        type: string
+        help: "#ops, or a channel ID like C0123456789"
+      text:
+        label: Message
+        type: string
+        help: The message itself. Use {{ column }} to pull values from the row.
+    body:
+      channel: "{{ channel }}"
+      text: "{{ text }}"
+    # Which statuses are worth another attempt. Nothing retries yet -- the
+    # dispatcher that will read this is the next increment.
+    retry_on: [429, 500, 502, 503, 504]

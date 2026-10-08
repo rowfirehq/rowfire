@@ -1,0 +1,147 @@
+# The public RowFire demo: one instance, a private workspace per visitor.
+#
+#   cd /opt/rowfire
+#   docker compose -f deploy/hosted/compose.yaml --env-file deploy/hosted/.env up -d
+#
+# See docs/hosting.md for the server, DNS and the deploy workflow. Nothing
+# here publishes a database port: only Caddy (80/443) faces the internet, and
+# it proxies to the UI on the compose network.
+#
+# Paths are relative to this file's folder, so the repository has to be
+# checked out on the server (the deploy workflow keeps it at origin/main).
+
+x-rowfire-env: &rowfire-env
+  ROWFIRE_PLATFORM_DSN: postgresql+psycopg://rowfire:${CONTROLPLANE_PASSWORD:-rowfire}@controlplane:5432/rowfire_platform
+  ROWFIRE_MASTER_KEY: ${ROWFIRE_MASTER_KEY:?set it in deploy/hosted/.env}
+  # The demo itself: visitor workspaces, fixed sample sources, inbox only.
+  ROWFIRE_HOSTED: "1"
+  ROWFIRE_EGRESS: inbox-only
+  ROWFIRE_HOSTED_DEFINITIONS: /demo/definitions.yaml
+  ROWFIRE_DEMO_DSN: postgresql://rowfire_ro:rowfire_ro@sample:5432/rowfire_fixture
+  ROWFIRE_DEMO_MYSQL_DSN: mysql://rowfire_ro:rowfire_ro@support:3306/rowfire_support
+  ROWFIRE_DEMO_ACTIVITY_DSN: postgresql://rowfire:${SAMPLE_PASSWORD:-rowfire}@sample:5432/rowfire_fixture
+  ROWFIRE_DEMO_ACTIVITY_SQL: /demo/activity.sql
+  ROWFIRE_WORKSPACE_IDLE_HOURS: ${ROWFIRE_WORKSPACE_IDLE_HOURS:-24}
+  ROWFIRE_MAX_WORKSPACES: ${ROWFIRE_MAX_WORKSPACES:-200}
+  ROWFIRE_FEEDBACK_URL: ${ROWFIRE_FEEDBACK_URL:-}
+
+x-rowfire-demo-files: &rowfire-demo-files
+  - ../../examples/saas/definitions.yaml:/demo/definitions.yaml:ro
+  - ../../examples/saas/activity.sql:/demo/activity.sql:ro
+
+services:
+  # The sample company's Postgres. Every visitor gets a copy of its tables in
+  # a schema of their own; this one is only ever the template.
+  sample:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rowfire
+      POSTGRES_PASSWORD: ${SAMPLE_PASSWORD:-rowfire}
+      POSTGRES_DB: rowfire_fixture
+    volumes:
+      - ../../examples/saas/db:/docker-entrypoint-initdb.d:ro
+      # Kept, unlike a local install's sample database: visitors' copies of
+      # the tables live here, and their workspaces outlive a restart.
+      - sample-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rowfire -d rowfire_fixture"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  # The sample support desk, shared read-only by every visitor.
+  support:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${SUPPORT_PASSWORD:-rowfire}
+      MYSQL_DATABASE: rowfire_support
+      TZ: UTC
+    volumes:
+      - ../../fixtures/mysql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    restart: unless-stopped
+
+  # RowFire's own database: visitor workspaces, their rules and history.
+  controlplane:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rowfire
+      POSTGRES_PASSWORD: ${CONTROLPLANE_PASSWORD:-rowfire}
+      POSTGRES_DB: rowfire_platform
+    volumes:
+      - controlplane-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rowfire -d rowfire_platform"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  # Migrations, once per deploy. Visitors' definitions are loaded when each
+  # workspace is made, so nothing is seeded here.
+  migrate:
+    image: ${ROWFIRE_IMAGE:-ghcr.io/rowfirehq/rowfire:main}
+    depends_on:
+      controlplane:
+        condition: service_healthy
+    environment: *rowfire-env
+    entrypoint: ["alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
+    restart: "no"
+
+  ui:
+    image: ${ROWFIRE_IMAGE:-ghcr.io/rowfirehq/rowfire:main}
+    depends_on:
+      sample:
+        condition: service_healthy
+      support:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *rowfire-env
+      # Behind Caddy: the public name is the only Host accepted, and the
+      # visitor's address comes from X-Forwarded-For.
+      ROWFIRE_ALLOWED_HOSTS: ${DOMAIN:?set DOMAIN in deploy/hosted/.env}
+      ROWFIRE_TRUST_PROXY: "1"
+    volumes: *rowfire-demo-files
+    entrypoint: ["rowfire"]
+    command: ["serve", "--host", "0.0.0.0", "--port", "8000", "--allow-non-loopback"]
+    restart: unless-stopped
+
+  # Polls every visitor's triggers, and deletes idle workspaces.
+  worker:
+    image: ${ROWFIRE_IMAGE:-ghcr.io/rowfirehq/rowfire:main}
+    depends_on:
+      sample:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment: *rowfire-env
+    volumes: *rowfire-demo-files
+    entrypoint: ["rowfire"]
+    command: ["worker", "--interval", "3"]
+    restart: unless-stopped
+
+  # HTTPS, with certificates from Let's Encrypt, for $DOMAIN.
+  caddy:
+    image: caddy:2
+    depends_on: [ui]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    restart: unless-stopped
+
+volumes:
+  sample-data:
+  controlplane-data:
+  caddy-data:

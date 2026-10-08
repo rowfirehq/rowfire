@@ -1,0 +1,79 @@
+# Render Blueprint: the public RowFire demo.
+#
+# One click on https://render.com/deploy?repo=https://github.com/rowfirehq/rowfire
+# creates everything below: the web app, the worker and a managed Postgres.
+# After that, every merge to main whose checks pass redeploys it. See
+# docs/hosting.md.
+#
+# Everything RowFire needs is derived from DATABASE_URL and the shared
+# settings by `rowfire cloud` (src/rowfire/cloud.py), so this file stays a
+# list of services. Roughly $20/month: two Starter services and the
+# smallest Postgres.
+#
+# The region cannot be changed after creation. The database and both
+# services must share one, so change all three together.
+
+envVarGroups:
+  - name: rowfire-demo
+    envVars:
+      # `demo`: a private workspace per visitor, sample data, Demo inbox only.
+      # (`private`, one team's own instance, is refused until RowFire has sign-in.)
+      - key: ROWFIRE_MODE
+        value: demo
+      # Wraps every credential RowFire stores. Generated once by Render and
+      # shared by both services; never change it on a running deploy.
+      - key: ROWFIRE_MASTER_KEY
+        generateValue: true
+      - key: ROWFIRE_FEEDBACK_URL
+        value: https://github.com/rowfirehq/rowfire/discussions
+      - key: ROWFIRE_WORKSPACE_IDLE_HOURS
+        value: "24"
+
+services:
+  - type: web
+    name: rowfire-demo
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    branch: main
+    dockerfilePath: ./Dockerfile
+    # Full commands: on Render these replace the image's entrypoint.
+    preDeployCommand: rowfire cloud predeploy
+    dockerCommand: rowfire cloud serve
+    # Redeploy on merges to main, but only once CI has passed on them.
+    autoDeployTrigger: checksPass
+    envVars:
+      - fromGroup: rowfire-demo
+      - key: DATABASE_URL
+        fromDatabase:
+          name: rowfire-db
+          property: connectionString
+
+  - type: worker
+    name: rowfire-demo-worker
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerCommand: rowfire cloud worker
+    autoDeployTrigger: checksPass
+    envVars:
+      - fromGroup: rowfire-demo
+      - key: DATABASE_URL
+        fromDatabase:
+          name: rowfire-db
+          property: connectionString
+
+databases:
+  - name: rowfire-db
+    plan: basic-256mb
+    region: frankfurt
+    databaseName: rowfire
+    user: rowfire
+    postgresMajorVersion: "16"
+    # The demo needs a few hundred MB at most. Without this Render gives it
+    # 15 GB, and a disk can grow later but never shrink.
+    diskSizeGB: 1
+    # Reachable only from these services, never from the internet.
+    ipAllowList: []

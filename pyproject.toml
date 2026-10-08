@@ -1,0 +1,55 @@
+[project]
+name = "rowfire"
+version = "0.1.0"
+description = "Turn database events into Slack, Zendesk and API actions: engineering defines the event once, everyone else subscribes"
+license = "AGPL-3.0"
+requires-python = ">=3.11"
+dependencies = [
+    "psycopg[binary]>=3.2",
+    "pymysql>=1.1",
+    "pydantic>=2.9",
+    "click>=8.1",
+    "rich>=13.9",
+    "pyyaml>=6.0",
+    "sqlglot>=25.24",
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.52.1",
+    "sqlmodel>=0.0.39",
+    "alembic>=1.19.0",
+    "cryptography>=50.0.0",
+]
+
+[project.scripts]
+rowfire = "rowfire.cli:cli"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=8.3",
+    "ruff>=0.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rowfire"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "db: requires the fixture Postgres (docker compose up -d postgres)",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Alembic writes these; reformatting generated code just creates diff noise
+# the next autogenerate undoes.
+"migrations/versions/*" = ["E501"]

@@ -1,0 +1,26 @@
+# Runs the stack against the SaaS demo database instead of the test fixture.
+#
+#   docker compose -f docker-compose.yml -f examples/saas/compose.yaml up -d
+#
+# Only two mounts change; compose merges volumes by their path inside the
+# container, so these replace the fixture's rather than adding to them.
+# Relative paths resolve from the repository root (the first file's folder).
+services:
+  postgres:
+    volumes:
+      - ./examples/saas/db:/docker-entrypoint-initdb.d:ro
+
+  init:
+    volumes:
+      - ./examples/saas/definitions.yaml:/work/definitions.yaml:ro
+
+  # "Simulate new activity" in Get started and the Demo inbox. RowFire never
+  # writes to a database it reads; this is a separate login, used only to run
+  # activity.sql against this sample database, and only because these two
+  # settings are here. Without them (any real install) there is no button.
+  ui:
+    environment:
+      ROWFIRE_DEMO_ACTIVITY_DSN: postgresql://rowfire:rowfire@postgres:5432/rowfire_fixture
+      ROWFIRE_DEMO_ACTIVITY_SQL: /demo/activity.sql
+    volumes:
+      - ./examples/saas/activity.sql:/demo/activity.sql:ro

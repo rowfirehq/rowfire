@@ -1,0 +1,71 @@
+# A destination that needs no account: messages land in RowFire's own Inbox.
+#
+# For trying RowFire before connecting a real system. The two actions are
+# shaped like Slack's chat.postMessage and Zendesk's create ticket, so a rule
+# built against the inbox reads the same as one built against the real thing,
+# and the Inbox page can draw each one as a message or a ticket.
+#
+# `inbox://` is the only thing special here. The dispatcher completes a
+# request to that scheme in-process, without opening a connection, so nothing
+# leaves the machine and there is nothing to authenticate with. Everything
+# else -- templates, caps, shadow and live, the fire ledger -- is the same path
+# every other integration takes.
+name: demo_inbox
+description: Demo inbox — messages appear in RowFire, nothing is sent anywhere
+base_url: inbox://demo
+
+auth:
+  kind: none
+
+actions:
+  post_message:
+    description: Post a chat message (shaped like Slack)
+    method: POST
+    path: /messages
+    parameters:
+      channel:
+        label: Channel
+        type: string
+        help: "#sales, #billing -- any name; the inbox groups messages by it"
+      text:
+        label: Message
+        type: string
+        help: The message itself. Use {{ column }} to pull values from the row.
+    body:
+      channel: "{{ channel }}"
+      text: "{{ text }}"
+
+  create_ticket:
+    description: Open a support ticket (shaped like Zendesk)
+    method: POST
+    path: /tickets
+    parameters:
+      subject:
+        label: Subject
+        type: string
+      body:
+        label: Description
+        type: string
+        help: The first comment on the ticket. Use {{ column }} to pull values from the row.
+      requester_email:
+        label: Requester email
+        type: string
+      requester_name:
+        label: Requester name
+        type: string
+        required: false
+      priority:
+        label: Priority
+        type: string
+        required: false
+        default: normal
+        help: urgent, high, normal or low.
+    body:
+      ticket:
+        subject: "{{ subject }}"
+        comment:
+          body: "{{ body }}"
+        requester:
+          name: "{{ requester_name }}"
+          email: "{{ requester_email }}"
+        priority: "{{ priority }}"

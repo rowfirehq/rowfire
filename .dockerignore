@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.git/
+.gitignore
+tests/
+fixtures/
+dist/
+build/
+*.egg-info/
+
+# Never let a local DSN or a customer's definitions reach a build context.
+.env
+definitions.yaml
+definitions.local.yaml
+
+# Frontend: build inside the image, never ship the host's node_modules
+ui/node_modules/
+ui/dist/
+src/rowfire/ui_dist/

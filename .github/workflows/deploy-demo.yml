@@ -1,0 +1,57 @@
+name: Deploy demo
+
+# Updates the public demo after every image published from main, so the
+# link always runs the latest main. Does nothing until the server's secrets
+# are set (docs/hosting.md):
+#
+#   DEMO_SSH_HOST         the server's address
+#   DEMO_SSH_USER         a user that can run docker
+#   DEMO_SSH_KEY          that user's private key (the public half in
+#                         ~/.ssh/authorized_keys on the server)
+#   DEMO_SSH_KNOWN_HOSTS  the server's host key line, from ssh-keyscan, so
+#                         the connection is verified rather than trusted
+on:
+  workflow_run:
+    workflows: [Image]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-demo
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    permissions:
+      contents: read
+    env:
+      HOST: ${{ secrets.DEMO_SSH_HOST }}
+      USER: ${{ secrets.DEMO_SSH_USER }}
+    steps:
+      - name: Skip until the demo server is configured
+        if: env.HOST == ''
+        run: echo "::notice::DEMO_SSH_HOST is not set; see docs/hosting.md. Nothing deployed."
+
+      - name: Deploy
+        if: env.HOST != ''
+        env:
+          KEY: ${{ secrets.DEMO_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEMO_SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'set -e
+             cd /opt/rowfire
+             git fetch --quiet origin main
+             git reset --quiet --hard origin/main
+             docker compose -f deploy/hosted/compose.yaml --env-file deploy/hosted/.env pull --quiet
+             docker compose -f deploy/hosted/compose.yaml --env-file deploy/hosted/.env up -d --remove-orphans
+             docker image prune -f >/dev/null'

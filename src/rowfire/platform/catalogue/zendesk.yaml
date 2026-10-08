@@ -1,0 +1,88 @@
+# Zendesk, via the Support API.
+#
+# Here because it is shaped differently from Slack in the two ways that matter:
+# the host is per-account rather than fixed, and it authenticates with HTTP
+# Basic rather than a bearer token. Neither needed a change to the engine.
+name: zendesk
+description: Zendesk Support API
+# Your own subdomain goes here -- https://<subdomain>.zendesk.com/api/v2.
+base_url: https://your-subdomain.zendesk.com/api/v2
+timeout_ms: 15000
+
+credentials:
+  email:
+    label: Agent email, with /token appended
+    help: >
+      Zendesk wants the literal string "you@example.com/token" as the Basic
+      username -- the /token suffix is what tells it the password is an API
+      token rather than a password. Not a secret, but it is needed to sign.
+    secret: false
+  api_token:
+    label: API token
+    help: Admin Center > Apps and integrations > Zendesk API. Token access must be enabled.
+    secret: true
+
+auth:
+  # Zendesk's API tokens are HTTP Basic, with "<email>/token" as the username.
+  kind: basic
+  username_credential: email
+  credential: api_token
+
+actions:
+  create_ticket:
+    description: Open a ticket
+    method: POST
+    path: /tickets.json
+    parameters:
+      subject:
+        label: Subject
+        type: string
+      body:
+        label: Description
+        type: string
+        help: The first comment on the ticket. Use {{ column }} to pull values from the row.
+      requester_email:
+        label: Requester email
+        type: string
+        help: Who the ticket is from. Zendesk creates the user if it has not seen them.
+      requester_name:
+        label: Requester name
+        type: string
+        required: false
+      priority:
+        label: Priority
+        type: string
+        required: false
+        default: normal
+        help: urgent, high, normal or low.
+      tags:
+        label: Tags
+        type: json
+        required: false
+        default: []
+    body:
+      ticket:
+        subject: "{{ subject }}"
+        comment:
+          body: "{{ body }}"
+        requester:
+          name: "{{ requester_name }}"
+          email: "{{ requester_email }}"
+        priority: "{{ priority }}"
+        tags: "{{ tags }}"
+    retry_on: [429, 500, 502, 503]
+
+  add_tags:
+    description: Add tags to an existing ticket
+    method: PUT
+    path: /tickets/{{ ticket_id }}/tags.json
+    parameters:
+      ticket_id:
+        label: Ticket ID
+        type: string
+      tags:
+        label: Tags
+        type: json
+    body:
+      tags: "{{ tags }}"
+    retry_on: [429, 500, 502, 503]

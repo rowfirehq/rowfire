@@ -1,0 +1,100 @@
+# Braze, included as proof the format is not Slack-shaped.
+#
+# A nested array body, a regional base URL that has to be set per workspace,
+# and a second credential that is configuration rather than a secret -- none
+# of which required a change to the engine.
+name: braze
+description: Braze REST API
+# Braze is regional. This is the US-01 cluster; set the right one when you
+# create the integration, it is not a secret and not guessable from the key.
+base_url: https://rest.iad-01.braze.com
+timeout_ms: 15000
+
+credentials:
+  api_key:
+    label: REST API key
+    help: Braze dashboard, Settings > API Keys. Needs the endpoints you intend to call.
+    secret: true
+  app_id:
+    label: App identifier
+    help: Optional. Only needed by actions that address a specific app.
+    secret: false
+    required: false
+
+auth:
+  kind: bearer
+  credential: api_key
+
+actions:
+  track_event:
+    description: Record a custom event against a user
+    method: POST
+    path: /users/track
+    parameters:
+      external_id:
+        label: User ID
+        type: string
+        help: Braze's external_id for the user — usually your own customer id.
+      event_name:
+        label: Event name
+        type: string
+      event_time:
+        label: Event time
+        type: string
+        required: false
+        help: >
+          ISO 8601. Leave blank to use the trigger's own clock, which is what
+          the fired row was placed in time by.
+      properties:
+        label: Properties
+        # An object passed through whole, which is the case a declared type
+        # earns its keep on: without one this would be sent as a JSON string
+        # and Braze would reject it.
+        type: json
+        required: false
+        default: {}
+    body:
+      events:
+        - external_id: "{{ external_id }}"
+          name: "{{ event_name }}"
+          time: "{{ event_time }}"
+          properties: "{{ properties }}"
+    retry_on: [429, 500, 502, 503]
+
+  update_attribute:
+    description: Set a custom attribute on a user
+    method: POST
+    path: /users/track
+    parameters:
+      external_id:
+        label: User ID
+        type: string
+      attribute_name:
+        label: Attribute name
+        type: string
+        help: The field to set. This becomes a key in the request body.
+      attribute_value:
+        label: Attribute value
+        type: string
+    body:
+      attributes:
+        - external_id: "{{ external_id }}"
+          "{{ attribute_name }}": "{{ attribute_value }}"
+    retry_on: [429, 500, 502, 503]
+
+  send_campaign:
+    description: Trigger a campaign send
+    method: POST
+    path: /campaigns/trigger/send
+    parameters:
+      campaign_id:
+        label: Campaign ID
+        type: string
+      external_id:
+        label: User ID
+        type: string
+    body:
+      campaign_id: "{{ campaign_id }}"
+      recipients:
+        - external_user_id: "{{ external_id }}"
+    retry_on: [429, 500, 502, 503]
