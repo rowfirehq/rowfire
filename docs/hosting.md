@@ -178,22 +178,6 @@ pointing at GitHub Discussions by default.
 
 ## The website
 
-[rowfire.com](https://rowfire.com) is the static page in [`site/`](../site):
-one HTML file, its images and the favicon, with no build step. It is hosted
-on Cloudflare Pages as the project `rowfire`, connected to this
-repository, with `rowfire.com` attached under **Custom domains**.
-
-Every merge to `main` that changes `site/` publishes it; the project's
-**Build watch paths** limit it to `site/*`. A pull request that changes it
-gets a preview link from Cloudflare. The project builds nothing: no
-framework preset, no build command, output directory `site`.
-
-To preview it locally:
-
-```bash
-python3 -m http.server 4173 --directory site
-```
-
-The screenshots in `site/img/` are crops of the ones in `docs/screenshots/`.
-Retake those and crop again when the UI changes, so the page shows the
-product as it is.
+[rowfire.com](https://rowfire.com) is a static page kept in its own
+repository and hosted on Cloudflare Pages. It is not part of RowFire and
+nothing here builds or serves it.
