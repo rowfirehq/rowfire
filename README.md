@@ -1,14 +1,16 @@
 # RowFire
 
-Turn what happens in your database into Slack messages, Zendesk tickets and API
-calls, without asking engineering to build each one.
+**The events your app never emitted.** Turn what happens in your database into
+events your tools act on: Slack messages and Zendesk tickets for your team,
+Braze events and campaigns for your customers, or a call to any REST API,
+without asking engineering to build each one.
 
 **[Try the live demo](https://demo.rowfire.com)** on sample data: nothing to
 install, no accounts to connect. More at [rowfire.com](https://rowfire.com).
 
 Engineering describes an event once, as a SQL query: *a charge was declined*,
 *an Enterprise account signed up*. From then on, whoever owns the workflow
-(support, billing, sales, growth) subscribes to it. They pick how often it may
+(support, billing, sales, growth, lifecycle) subscribes to it. They pick how often it may
 fire per customer, attach an action, and switch it on. No application changes,
 no new service to deploy, and nothing is ever written to the database being
 read.
@@ -32,10 +34,40 @@ duplication can happen, so the key is a property of the trigger. Whoever owns
 the customer experience decides how often to act, so the cadence belongs to the
 rule.
 
-**Data sources.** PostgreSQL and MySQL, as many databases as you have: each
-trigger names the one it reads. A trigger is a read-only query, polled on a
-clock, so new rows are picked up on each poll (within a minute by default)
-rather than streamed from the database's change log.
+**Data sources.** PostgreSQL, MySQL and MariaDB, as many databases as you
+have: each trigger names the one it reads. A trigger is a read-only query,
+polled on a clock, so new rows are picked up on each poll (within a minute by
+default) rather than streamed from the database's change log.
+
+## What people build with it
+
+| for the team | for the customer | for other systems |
+| --- | --- | --- |
+| `#billing` when a card is declined | A Braze `trial_stalled` event that starts a rescue campaign | Revoke access when a subscription lapses |
+| A Zendesk ticket for a trial that never activated | A push when they reach 90% of their quota (a Braze campaign, or your push provider's API) | Send a flagged order to a fraud service |
+| Escalate urgent tickets nobody has answered | A win-back campaign after 14 days without a login | Open a ticket when an order is paid but not fulfilled after 24 hours |
+
+### Events your app can't emit
+
+An application emits an event when its code runs. It cannot emit one for
+something that did *not* happen. A trigger is a query rather than a change
+stream, so it can fire on:
+
+- a **derived** condition: *the third declined charge this month*, *an account
+  past 80% of its seats*;
+- an **absence**: *a trial that ends in three days and never activated*, *an
+  urgent ticket with no reply*;
+- **data that is already there**, with no tracking call to add and no release
+  to wait for.
+
+### What it is not
+
+- **Not ETL or reverse ETL.** Reverse ETL syncs state, keeping a field equal to
+  a column. RowFire emits moments: this just became true for this key, so act
+  once, at the cadence the rule allows.
+- **Not CDC or streaming.** Triggers are polled, within a minute by default.
+- **Not for messages that must arrive instantly.** It is built for reactions
+  (campaigns, tickets, follow-ups), not one-time passcodes.
 
 ## Demo: a SaaS company, Slack and Zendesk
 
@@ -190,6 +222,29 @@ same bodies go to `inbox://demo/messages` and `inbox://demo/tickets`:
       "priority": "high",
       "tags": ["billing", "payment_failed"]
     }
+  }
+}
+```
+
+The same trigger can feed your customer-facing tools. The demo does not wire
+Braze, but a binding of the catalogue's `track_event` action on
+`payment_failed`, with `external_id` set to `{{ account_id }}` and
+`event_name` to `payment_failed`, renders a request of this shape, and a Braze
+campaign triggered by that custom event takes it from there:
+
+```json
+{
+  "method": "POST",
+  "url": "https://rest.iad-01.braze.com/users/track",
+  "body": {
+    "events": [
+      {
+        "external_id": "5",
+        "name": "payment_failed",
+        "time": "2026-10-08T09:14:00+00:00",
+        "properties": { "invoice_no": "INV-5-LIVE", "amount": "49.00" }
+      }
+    ]
   }
 }
 ```
