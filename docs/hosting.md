@@ -160,6 +160,14 @@ $C down -v               # wipe everything, every visitor's workspace included
 `ROWFIRE_FEEDBACK_URL` puts a **Give feedback** button in the demo's banner,
 pointing at GitHub Discussions by default.
 
+`ROWFIRE_HEAD_HTML` adds markup to the end of the page's `<head>`, such as an
+analytics tag, so it lives in your instance's environment rather than in the
+repository. On Render, set it in the `rowfire-demo` environment group; here,
+in `deploy/hosted/.env`. Unset, the page is served exactly as built, which is
+how every self-hosted instance starts: RowFire itself tracks nothing. The value
+goes into the page verbatim, so treat it like any other code you deploy, and
+tell your visitors what it collects.
+
 ## What it does not do yet
 
 - **Visitors are anonymous.** Their workspace lives in one browser. There

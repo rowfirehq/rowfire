@@ -36,6 +36,8 @@ Settings, all read from the environment:
                                         X-Forwarded-For (behind Caddy)
     ROWFIRE_COOKIE_INSECURE=1           drop `Secure` (plain-HTTP testing only)
     ROWFIRE_FEEDBACK_URL                where "Give feedback" goes
+    ROWFIRE_HEAD_HTML                   markup added to the page's <head>, e.g.
+                                        an analytics tag (any instance, see api)
 """
 
 from __future__ import annotations

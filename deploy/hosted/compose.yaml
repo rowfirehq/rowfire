@@ -24,6 +24,7 @@ x-rowfire-env: &rowfire-env
   ROWFIRE_WORKSPACE_IDLE_HOURS: ${ROWFIRE_WORKSPACE_IDLE_HOURS:-24}
   ROWFIRE_MAX_WORKSPACES: ${ROWFIRE_MAX_WORKSPACES:-200}
   ROWFIRE_FEEDBACK_URL: ${ROWFIRE_FEEDBACK_URL:-}
+  ROWFIRE_HEAD_HTML: ${ROWFIRE_HEAD_HTML:-}
 
 x-rowfire-demo-files: &rowfire-demo-files
   - ../../examples/saas/definitions.yaml:/demo/definitions.yaml:ro

@@ -2153,15 +2153,17 @@ def _mount_ui(app: FastAPI, dist: Path | None = None) -> None:
     if not (dist / "index.html").exists():
         return
 
-    from fastapi.responses import FileResponse
+    from fastapi.responses import FileResponse, HTMLResponse
     from fastapi.staticfiles import StaticFiles
 
     app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
     root = dist.resolve()
+    index = root / "index.html"
+    page = _with_head_html(index.read_text(), os.environ.get("ROWFIRE_HEAD_HTML"))
 
     @app.get("/{full_path:path}")
-    def spa(full_path: str) -> FileResponse:
+    def spa(full_path: str) -> Response:
         # Every page is a deep link -- /rules/<name>, /integrations/<name>/...
         # -- so any path that is not a file is answered with the app, which
         # routes on it. Two exceptions. An unknown /api path is a client bug
@@ -2170,6 +2172,25 @@ def _mount_ui(app: FastAPI, dist: Path | None = None) -> None:
         if full_path == "api" or full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="Not Found")
         candidate = (dist / full_path).resolve()
-        if full_path and candidate.is_relative_to(root) and candidate.is_file():
+        if (
+            full_path
+            and candidate != index
+            and candidate.is_relative_to(root)
+            and candidate.is_file()
+        ):
             return FileResponse(candidate)
-        return FileResponse(dist / "index.html")
+        return HTMLResponse(page)
+
+
+def _with_head_html(page: str, head_html: str | None) -> str:
+    """The app's page, with ROWFIRE_HEAD_HTML added at the end of its <head>.
+
+    One instance's own markup -- an analytics tag, say -- kept in that
+    instance's environment rather than in the repository. Unset, the page is
+    served exactly as built. It is the operator's HTML and goes in verbatim:
+    whoever can set the environment can already run anything.
+    """
+    if not head_html or "</head>" not in page:
+        return page
+    at = page.index("</head>")
+    return page[:at] + head_html + "\n" + page[at:]
