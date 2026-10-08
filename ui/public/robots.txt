@@ -1,0 +1,5 @@
+# A RowFire instance is an application, not content: crawling it would only
+# open sessions (on the public demo, a visitor workspace per page) and index
+# screens of someone's own data. The site to index is https://rowfire.com.
+User-agent: *
+Disallow: /
