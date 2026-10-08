@@ -6,7 +6,7 @@
 -- hold back a second run of a fixed script entirely, and a button that
 -- usually does nothing reads as broken.
 --
--- Run by RowFire only when a deployment sets both ROWFIRE_DEMO_ACTIVITY_DSN
+-- Run by Rowfire only when a deployment sets both ROWFIRE_DEMO_ACTIVITY_DSN
 -- (a write-capable login to *this sample database*, never a data source) and
 -- ROWFIRE_DEMO_ACTIVITY_SQL (this file). By hand:
 --

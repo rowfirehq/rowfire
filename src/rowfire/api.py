@@ -376,7 +376,7 @@ def _require_own_sources() -> None:
     if hosted.enabled():
         raise HTTPException(
             status_code=403,
-            detail="Data sources are fixed in the hosted demo. Run RowFire yourself "
+            detail="Data sources are fixed in the hosted demo. Run Rowfire yourself "
             "to connect your own database.",
         )
 
@@ -2098,8 +2098,8 @@ def create_app(session: Session | None = None, dev_origin: str | None = None) ->
         SESSION = session
 
     app = FastAPI(
-        title="RowFire",
-        description="Local surface for the RowFire engine.",
+        title="Rowfire",
+        description="Local surface for the Rowfire engine.",
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
     )

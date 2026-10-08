@@ -14,7 +14,7 @@ services:
     volumes:
       - ./examples/saas/definitions.yaml:/work/definitions.yaml:ro
 
-  # "Simulate new activity" in Get started and the Demo inbox. RowFire never
+  # "Simulate new activity" in Get started and the Demo inbox. Rowfire never
   # writes to a database it reads; this is a separate login, used only to run
   # activity.sql against this sample database, and only because these two
   # settings are here. Without them (any real install) there is no button.

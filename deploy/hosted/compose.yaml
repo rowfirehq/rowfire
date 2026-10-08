@@ -1,4 +1,4 @@
-# The public RowFire demo: one instance, a private workspace per visitor.
+# The public Rowfire demo: one instance, a private workspace per visitor.
 #
 #   cd /opt/rowfire
 #   docker compose -f deploy/hosted/compose.yaml --env-file deploy/hosted/.env up -d
@@ -67,7 +67,7 @@ services:
       retries: 60
     restart: unless-stopped
 
-  # RowFire's own database: visitor workspaces, their rules and history.
+  # Rowfire's own database: visitor workspaces, their rules and history.
   controlplane:
     image: postgres:16-alpine
     environment:

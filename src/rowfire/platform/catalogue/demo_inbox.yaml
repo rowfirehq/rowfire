@@ -1,6 +1,6 @@
-# A destination that needs no account: messages land in RowFire's own Inbox.
+# A destination that needs no account: messages land in Rowfire's own Inbox.
 #
-# For trying RowFire before connecting a real system. The two actions are
+# For trying Rowfire before connecting a real system. The two actions are
 # shaped like Slack's chat.postMessage and Zendesk's create ticket, so a rule
 # built against the inbox reads the same as one built against the real thing,
 # and the Inbox page can draw each one as a message or a ticket.
@@ -11,7 +11,7 @@
 # else -- templates, caps, shadow and live, the fire ledger -- is the same path
 # every other integration takes.
 name: demo_inbox
-description: Demo inbox — messages appear in RowFire, nothing is sent anywhere
+description: Demo inbox — messages appear in Rowfire, nothing is sent anywhere
 base_url: inbox://demo
 
 auth:
