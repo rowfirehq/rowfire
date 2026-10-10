@@ -9,7 +9,16 @@
 // and mode hangs off the rule.
 
 /** The database engines a data source can be. */
-export type SourceKind = "postgres" | "mysql";
+export type SourceKind = "postgres" | "mysql" | "supabase";
+
+/** One Supabase project an OAuth grant can read. */
+export interface SupabaseProject {
+  ref: string;
+  name: string | null;
+  organization: string | null;
+  region: string | null;
+  status: string | null;
+}
 
 export interface ConnectResponse {
   connected: boolean;
@@ -540,6 +549,29 @@ export const api = {
     request<ConnectResponse>("/sources", {
       method: "POST",
       body: JSON.stringify({ name, dsn }),
+    }),
+
+  /** Whether this server can offer "Connect Supabase". */
+  supabaseStatus: () => request<{ oauth: boolean; access_token: boolean }>("/sources/supabase"),
+
+  /** Start Supabase's OAuth flow; the browser goes to the returned URL. */
+  supabaseAuthorize: (name: string) =>
+    request<{ url: string }>("/sources/supabase/authorize", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+
+  /** The projects a fresh Supabase grant can read. */
+  supabaseProjects: (grant: string) =>
+    request<{ projects: SupabaseProject[] }>(
+      `/sources/supabase/projects?grant=${encodeURIComponent(grant)}`,
+    ),
+
+  /** Store a picked Supabase project as a source that reads through the grant. */
+  addSupabaseSource: (name: string, grant: string, projectRef: string) =>
+    request<ConnectResponse>("/sources/supabase", {
+      method: "POST",
+      body: JSON.stringify({ name, grant, project_ref: projectRef }),
     }),
 
   deleteSource: (name: string) =>

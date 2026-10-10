@@ -204,7 +204,7 @@ def poll(
     until = moment
 
     try:
-        # Each trigger reads its own source, which may be Postgres or MySQL;
+        # Each trigger reads its own source, which may be Postgres, MySQL or Supabase;
         # the query is checked and rendered in that engine's dialect.
         if dsn is None:
             dsn = store.trigger_dsn(

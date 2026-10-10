@@ -132,87 +132,87 @@ def _read_postgres_schema(conn: Any, schema: str) -> dict[str, Table]:
     """
     tables: dict[str, Table] = {}
 
-    with conn.cursor() as cur:
-        # relkind: r = table, p = partitioned, v = view, m = materialised view,
-        # f = foreign table. Views are included because plenty of production
-        # schemas expose their clean shape that way.
-        cur.execute(
-            """
-            SELECT c.relname AS table_name,
-                   a.attname AS column_name,
-                   format_type(a.atttypid, a.atttypmod) AS data_type,
-                   NOT a.attnotnull AS nullable
-            FROM pg_class c
-            JOIN pg_namespace n ON n.oid = c.relnamespace
-            JOIN pg_attribute a ON a.attrelid = c.oid
-            WHERE n.nspname = %s
-              AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
-              AND a.attnum > 0
-              AND NOT a.attisdropped
-            ORDER BY c.relname, a.attnum
-            """,
-            (schema,),
-        )
-        for row in cur.fetchall():
-            table = tables.setdefault(
-                row["table_name"], Table(name=row["table_name"], schema=schema)
+    # Through fetch() rather than a raw cursor, so a source that is not a
+    # socket -- Supabase's read-only query endpoint -- reads the same way.
+    #
+    # relkind: r = table, p = partitioned, v = view, m = materialised view,
+    # f = foreign table. Views are included because plenty of production
+    # schemas expose their clean shape that way.
+    rows, _ = conn.fetch(
+        """
+        SELECT c.relname AS table_name,
+               a.attname AS column_name,
+               format_type(a.atttypid, a.atttypmod) AS data_type,
+               NOT a.attnotnull AS nullable
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_attribute a ON a.attrelid = c.oid
+        WHERE n.nspname = %(schema)s
+          AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+        ORDER BY c.relname, a.attnum
+        """,
+        {"schema": schema},
+    )
+    for row in rows:
+        table = tables.setdefault(row["table_name"], Table(name=row["table_name"], schema=schema))
+        table.columns.append(
+            Column(
+                name=row["column_name"],
+                pg_type=_base_type(row["data_type"]),
+                nullable=row["nullable"],
             )
-            table.columns.append(
-                Column(
-                    name=row["column_name"],
-                    pg_type=_base_type(row["data_type"]),
-                    nullable=row["nullable"],
+        )
+
+    # Single-column primary keys only. A composite-key table is skipped
+    # rather than half-modelled -- dedup and v1 enrichment both assume one.
+    rows, _ = conn.fetch(
+        """
+        SELECT c.relname AS table_name,
+               a.attname AS column_name,
+               i.indnatts AS key_columns
+        FROM pg_index i
+        JOIN pg_class c ON c.oid = i.indrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey)
+        WHERE i.indisprimary AND n.nspname = %(schema)s
+        """,
+        {"schema": schema},
+    )
+    for row in rows:
+        if row["key_columns"] == 1 and row["table_name"] in tables:
+            tables[row["table_name"]].primary_key = row["column_name"]
+
+    rows, _ = conn.fetch(
+        """
+        SELECT c.relname  AS table_name,
+               a.attname  AS column_name,
+               tc.relname AS target_table,
+               ta.attname AS target_column
+        FROM pg_constraint con
+        JOIN pg_class c ON c.oid = con.conrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_class tc ON tc.oid = con.confrelid
+        JOIN pg_attribute a
+          ON a.attrelid = con.conrelid AND a.attnum = con.conkey[1]
+        JOIN pg_attribute ta
+          ON ta.attrelid = con.confrelid AND ta.attnum = con.confkey[1]
+        WHERE con.contype = 'f'
+          AND n.nspname = %(schema)s
+          AND array_length(con.conkey, 1) = 1
+        """,
+        {"schema": schema},
+    )
+    for row in rows:
+        if row["table_name"] in tables:
+            tables[row["table_name"]].foreign_keys.append(
+                ForeignKey(
+                    column=row["column_name"],
+                    target_table=row["target_table"],
+                    target_column=row["target_column"],
                 )
             )
-
-        # Single-column primary keys only. A composite-key table is skipped
-        # rather than half-modelled -- dedup and v1 enrichment both assume one.
-        cur.execute(
-            """
-            SELECT c.relname AS table_name,
-                   a.attname AS column_name,
-                   i.indnatts AS key_columns
-            FROM pg_index i
-            JOIN pg_class c ON c.oid = i.indrelid
-            JOIN pg_namespace n ON n.oid = c.relnamespace
-            JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey)
-            WHERE i.indisprimary AND n.nspname = %s
-            """,
-            (schema,),
-        )
-        for row in cur.fetchall():
-            if row["key_columns"] == 1 and row["table_name"] in tables:
-                tables[row["table_name"]].primary_key = row["column_name"]
-
-        cur.execute(
-            """
-            SELECT c.relname  AS table_name,
-                   a.attname  AS column_name,
-                   tc.relname AS target_table,
-                   ta.attname AS target_column
-            FROM pg_constraint con
-            JOIN pg_class c ON c.oid = con.conrelid
-            JOIN pg_namespace n ON n.oid = c.relnamespace
-            JOIN pg_class tc ON tc.oid = con.confrelid
-            JOIN pg_attribute a
-              ON a.attrelid = con.conrelid AND a.attnum = con.conkey[1]
-            JOIN pg_attribute ta
-              ON ta.attrelid = con.confrelid AND ta.attnum = con.confkey[1]
-            WHERE con.contype = 'f'
-              AND n.nspname = %s
-              AND array_length(con.conkey, 1) = 1
-            """,
-            (schema,),
-        )
-        for row in cur.fetchall():
-            if row["table_name"] in tables:
-                tables[row["table_name"]].foreign_keys.append(
-                    ForeignKey(
-                        column=row["column_name"],
-                        target_table=row["target_table"],
-                        target_column=row["target_column"],
-                    )
-                )
 
     conn.rollback()
     return tables

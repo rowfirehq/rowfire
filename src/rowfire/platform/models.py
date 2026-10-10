@@ -138,6 +138,37 @@ class Connection(SQLModel, table=True):
     last_verify_error: str | None = Field(default=None, sa_column=Column(Text))
 
 
+class OAuthGrant(SQLModel, table=True):
+    """Tokens a customer granted through someone's OAuth app, at rest.
+
+    A Supabase source names one of these instead of holding a password: its
+    DSN is `supabase://<ref>?grant=<id>`. The tokens are one envelope, like a
+    DSN, and are rewritten in place each time the access token is refreshed --
+    which is why they live here and not inside the connection's own DSN: a
+    refresh must not need to know which source, or how many, use the grant.
+    """
+
+    __tablename__ = "oauth_grant"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    workspace_id: uuid.UUID = Field(default=DEFAULT_WORKSPACE_ID, index=True)
+    provider: str = Field(default="supabase")
+
+    # {"access_token", "refresh_token", "expires_at"} as one encrypted JSON
+    # object. expires_at is repeated in the clear so a refresh can be decided
+    # without decrypting anything.
+    tokens_ciphertext: bytes = Field(sa_column=Column(LargeBinary, nullable=False))
+    tokens_nonce: bytes = Field(sa_column=Column(LargeBinary, nullable=False))
+    wrapped_data_key: bytes = Field(sa_column=Column(LargeBinary, nullable=False))
+    wrap_nonce: bytes = Field(sa_column=Column(LargeBinary, nullable=False))
+    key_id: str = Field(default="local/env")
+    algorithm: str
+
+    expires_at: datetime = Field(sa_column=_ts(nullable=False))
+    created_at: datetime = Field(default_factory=_now, sa_column=_ts(nullable=False))
+    refreshed_at: datetime | None = Field(default=None, sa_column=_ts())
+
+
 class DefinitionVersion(SQLModel, table=True):
     """An immutable snapshot of definitions.yaml.
 

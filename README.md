@@ -316,7 +316,7 @@ wizard — except the first, which is one:
 | **Integrations** | Where actions go — Slack, Zendesk, Braze or any REST API — and the shape of each request. |
 | **Activity** | Modes, watermarks, what has fired, the kill switch. |
 | **Demo inbox** | What rules delivered to the Demo inbox, drawn as chat messages and tickets — shadow and live. |
-| **Data sources** | The databases it reads — PostgreSQL or MySQL, as many as you need — and what each can see. |
+| **Data sources** | The databases it reads — PostgreSQL, MySQL or Supabase, as many as you need — and what each can see. |
 
 Every data source and integration is shown with its mark, so which database a
 trigger reads, or which system a rule talks to, is answered at a glance.
@@ -434,12 +434,13 @@ Vite proxies `/api` to the Python server, so the browser still sees one origin.
 ## Data sources
 
 A **data source** is a database Rowfire reads: a name, and a read-only DSN
-stored encrypted. There can be any number, on either engine:
+stored encrypted. There can be any number, on any of these:
 
 | engine | DSN | driver |
 | --- | --- | --- |
 | PostgreSQL | `postgresql://user:pass@host:5432/db` | psycopg |
 | MySQL (and MariaDB) | `mysql://user:pass@host:3306/db` | PyMySQL |
+| Supabase | `supabase://<project ref>` | Supabase's Management API |
 
 The scheme picks the engine; nothing else needs to say which it is. Add sources
 under **Data sources** in the UI, or from the CLI:
@@ -491,6 +492,41 @@ trigger's rules back to shadow. A source a trigger still reads cannot be deleted
 - **TLS** follows the MySQL client's `ssl-mode`:
   `mysql://…/db?ssl-mode=VERIFY_IDENTITY` (also `REQUIRED`, `VERIFY_CA`,
   and `ssl-ca=/path/to/ca.pem`).
+
+### Supabase specifics
+
+A Supabase project can be read without a database password. Instead of a
+connection, Rowfire sends each query to Supabase's read-only query endpoint
+(`POST /v1/projects/{ref}/database/query/read-only`), which runs it as
+`supabase_read_only_user`. Polling, backtests and shadow mode work exactly as
+they do on Postgres; the SQL is Postgres SQL.
+
+- **Connect with OAuth.** Register an OAuth app in your Supabase organization
+  (*Organization settings → OAuth Apps*) with **Projects: Read** and
+  **Database: Read**, and nothing else, and callback URLs for each address
+  you open Rowfire at, such as `http://localhost:8000/oauth/supabase/callback`.
+  Supabase accepts plain `http://` only for `localhost`, not `127.0.0.1`, so
+  open Rowfire at `localhost` or set `ROWFIRE_PUBLIC_URL` to it; anywhere
+  else, the callback must be `https://` (your own address, set as
+  `ROWFIRE_PUBLIC_URL`). Then set `SUPABASE_OAUTH_CLIENT_ID` and
+  `SUPABASE_OAUTH_CLIENT_SECRET`, and **Data sources** offers *Connect
+  Supabase*: approve, pick a project, done. The tokens are stored encrypted
+  like a DSN (the source is `supabase://<ref>?grant=<id>`) and refreshed as
+  they expire.
+- **Or a personal access token.** `supabase://<project ref>` with
+  `SUPABASE_ACCESS_TOKEN` set reads with that token, for the CLI or an install
+  without an OAuth app.
+- **Read-only is Supabase's to enforce.** The role is Supabase's read-only
+  user and the endpoint runs nothing else; the query checker still refuses
+  anything but a single `SELECT`.
+- **Tables are qualified for you.** The endpoint wants every table
+  schema-qualified; an unqualified one is read as `public.<table>` before the
+  query is sent. Name other schemas yourself (`auth.users`).
+- **One call per poll.** Rows come back as JSON, so each query is wrapped in
+  `to_json(...)` and its column types are looked up once and cached. A
+  steady poll is one HTTPS call.
+- **The endpoint is in beta** on Supabase's side, and rate-limited. A poll
+  that is refused (429) fails that run and is retried on the next tick.
 
 ## The control plane
 

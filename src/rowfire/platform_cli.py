@@ -62,7 +62,7 @@ def init_key() -> None:
     help="Data source name. A trigger reads it with `source: <name>`; `primary` is the default.",
 )
 def connect(dsn_env: str, name: str) -> None:
-    """Store a data source (Postgres or MySQL), encrypted."""
+    """Store a data source (Postgres, MySQL or Supabase), encrypted."""
     import re
 
     from .sources import EngineError, kind_of
