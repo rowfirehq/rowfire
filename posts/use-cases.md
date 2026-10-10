@@ -10,7 +10,7 @@ page appears in `rowfire-site/src/content/use-cases/`, append it as `todo`.
 
 | # | Slug | Team | Status | Date | LinkedIn | X | YouTube |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | rescue-trials-that-never-activated | Customer success | todo | | | | |
+| 1 | rescue-trials-that-never-activated | Customer success | drafted | 2026-10-10 | 6aca5ecfb07d37ac977a0fc0 | 6aca5ed2d9cab260a7cc5e25 | 6aca5ed6d9cab260a7cc5e88 |
 | 2 | escalate-urgent-tickets-nobody-answered | Support | todo | | | | |
 | 3 | slack-and-zendesk-when-a-card-is-declined | Billing | todo | | | | |
 | 4 | post-enterprise-signups-to-slack | Sales | todo | | | | |
