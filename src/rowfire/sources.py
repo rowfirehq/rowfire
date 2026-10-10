@@ -5,6 +5,7 @@ A data source is a named DSN. Its scheme picks the driver:
     postgresql:// postgres://        Postgres, through psycopg
     mysql:// mysql+pymysql://        MySQL (and MariaDB), through PyMySQL
     mariadb://
+    supabase://                      Supabase, through its Management API (supabase.py)
 
 Everything above this module -- the engine, the scheduler, the schema reader,
 the API -- talks to a `SourceConnection` and does not care which one it got.
@@ -34,9 +35,9 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from urllib.parse import parse_qs, unquote, urlsplit
 
-Kind = Literal["postgres", "mysql"]
+Kind = Literal["postgres", "mysql", "supabase"]
 
-KINDS: tuple[Kind, ...] = ("postgres", "mysql")
+KINDS: tuple[Kind, ...] = ("postgres", "mysql", "supabase")
 
 _SCHEMES: dict[str, Kind] = {
     "postgres": "postgres",
@@ -45,12 +46,13 @@ _SCHEMES: dict[str, Kind] = {
     "mysql": "mysql",
     "mysql+pymysql": "mysql",
     "mariadb": "mysql",
+    "supabase": "supabase",
 }
 
 # The sqlglot dialect each engine's SQL is parsed and re-rendered in.
-DIALECTS: dict[Kind, str] = {"postgres": "postgres", "mysql": "mysql"}
+DIALECTS: dict[Kind, str] = {"postgres": "postgres", "mysql": "mysql", "supabase": "postgres"}
 
-LABELS: dict[Kind, str] = {"postgres": "PostgreSQL", "mysql": "MySQL"}
+LABELS: dict[Kind, str] = {"postgres": "PostgreSQL", "mysql": "MySQL", "supabase": "Supabase"}
 
 
 class EngineError(Exception):
@@ -69,7 +71,8 @@ def kind_of(dsn: str) -> Kind:
         # The scheme is safe to echo; nothing after it is.
         shown = scheme or "no scheme"
         raise EngineError(
-            f"unsupported database ({shown}). Use a postgresql:// or mysql:// connection string."
+            f"unsupported database ({shown}). Use a postgresql://, mysql:// or "
+            f"supabase:// connection string."
         )
     return kind
 
@@ -80,6 +83,10 @@ def summarise(dsn: str) -> str:
     Deliberately hand-rolled rather than str(parsed): urlsplit keeps the
     password in the netloc, and one careless f-string would put it in a log.
     """
+    if dsn.strip().lower().startswith("supabase://"):
+        from .supabase import summarise as summarise_supabase
+
+        return summarise_supabase(dsn)
     remainder = dsn.split("://", 1)[-1]
     if "@" in remainder:
         remainder = remainder.rsplit("@", 1)[1]
@@ -187,6 +194,13 @@ class SourceConnection:
 def connect(dsn: str, statement_timeout_ms: int = 30_000) -> Iterator[SourceConnection]:
     """Open a hardened read-only connection to whichever engine the DSN names."""
     kind = kind_of(dsn)
+    if kind == "supabase":
+        # No socket to open or close: each query is one HTTPS call, run by
+        # Supabase as its read-only user. The statement timeout is theirs.
+        from . import supabase
+
+        yield supabase.connect(dsn)  # type: ignore[misc]
+        return
     opener = _open_postgres if kind == "postgres" else _open_mysql
     raw = opener(dsn, statement_timeout_ms)
     try:

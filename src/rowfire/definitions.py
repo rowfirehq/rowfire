@@ -139,7 +139,7 @@ class Source(BaseModel):
 
     # Informational: the driver is chosen from the DSN's scheme, which is the
     # one thing that cannot disagree with the database it points at.
-    type: Literal["postgres", "mysql"] = "postgres"
+    type: Literal["postgres", "mysql", "supabase"] = "postgres"
     # Name of the env var holding the DSN for a trigger that names no stored
     # source. The DSN itself is never written to this file, never logged, and
     # never rendered in output.

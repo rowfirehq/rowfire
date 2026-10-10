@@ -101,7 +101,7 @@ const PLACES: Place[] = [
     id: "sources",
     label: "Data sources",
     title: "Data sources",
-    blurb: "The databases this reads — Postgres or MySQL, as many as you need.",
+    blurb: "The databases this reads — Postgres, MySQL or Supabase, as many as you need.",
     icon: (
       <svg viewBox="0 0 16 16" aria-hidden="true">
         <ellipse cx="8" cy="3.8" rx="5.5" ry="2.3" />

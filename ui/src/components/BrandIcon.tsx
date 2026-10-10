@@ -9,8 +9,9 @@
  * shown here only to identify the service a source or integration talks to.
  *
  * Braze has never been in Simple Icons and a drawn imitation of a real logo
- * would be worse than none, so it gets a lettered tile; so does any system
- * we do not know. A custom HTTP integration gets a plug.
+ * would be worse than none, so it gets a lettered tile; so do Supabase (until
+ * its mark is copied in from a Simple Icons release) and any system we do
+ * not know. A custom HTTP integration gets a plug.
  *
  * Drawn as a white glyph on a tile of the brand colour, which reads the same
  * on a light page and a dark one -- several brand colours are near-black and
@@ -49,6 +50,8 @@ const MARKS: Record<string, Mark> = {
 /** Tiles for things without a mark: a letter, in a colour of their own. */
 const LETTERED: Record<string, { title: string; color: string; letter: string }> = {
   braze: { title: "Braze", color: "#3b2f63", letter: "B" },
+  // A darker shade of Supabase's green, so the white letter stays legible.
+  supabase: { title: "Supabase", color: "#1f7a52", letter: "S" },
 };
 
 /** Rowfire's own Demo inbox: a tray, in the page's accent rather than a brand's. */
@@ -66,7 +69,7 @@ type Size = "sm" | "md" | "lg";
 const PIXELS: Record<Size, number> = { sm: 20, md: 28, lg: 40 };
 
 /**
- * The mark for a data source engine (`postgres`, `mysql`) or an integration
+ * The mark for a data source engine (`postgres`, `mysql`, `supabase`) or an integration
  * provider (`slack`, `zendesk`, `braze`, `custom`, ...). Unknown names get a
  * lettered tile, never nothing.
  */
@@ -116,5 +119,6 @@ export function BrandIcon({
 export function engineLabel(kind: string | null | undefined): string {
   if (kind === "postgres") return "PostgreSQL";
   if (kind === "mysql") return "MySQL";
+  if (kind === "supabase") return "Supabase";
   return "Unknown";
 }

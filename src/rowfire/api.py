@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -40,11 +41,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text as sa_text
 from sqlmodel import select
 
-from . import demo_activity, engine, hosted, introspect, sources, tenancy
+from . import demo_activity, engine, hosted, introspect, sources, supabase, tenancy
 from .compile import CompileError, compile_trigger
 from .definitions import DefinitionError, Definitions
 from .definitions import loads as loads_definitions
-from .platform import crypto, store
+from .platform import crypto, oauth, store
 from .platform import db as platform_db
 from .platform.models import AuthKind, Fire, Mode, RuleState, Run, TriggerState
 
@@ -571,6 +572,184 @@ def delete_source(name: str) -> dict[str, Any]:
         if not store.delete_connection(session, name, workspace_id=tenancy.current()):
             raise HTTPException(status_code=404, detail=f"No data source named `{name}`.")
     return {"deleted": True, "name": name}
+
+
+# ------------------------------------------------------------ supabase
+#
+# Connect a Supabase project without a database password. The customer
+# approves Rowfire's OAuth app (database:read and projects:read), picks a
+# project, and the source becomes `supabase://<ref>?grant=<id>`: queries go
+# through Supabase's read-only query endpoint with tokens refreshed from the
+# grant. See supabase.py for the source itself and platform/oauth.py for the
+# grant.
+
+SUPABASE_CALLBACK_PATH = "/oauth/supabase/callback"
+_SUPABASE_FLOW_COOKIE = "rowfire_supabase_oauth"
+_SUPABASE_FLOW_SECONDS = 600
+PUBLIC_URL_ENV = "ROWFIRE_PUBLIC_URL"
+
+
+class SupabaseAuthorize(BaseModel):
+    name: str = Field(min_length=1, max_length=63, pattern=r"^[a-z][a-z0-9_]*$")
+
+
+class SupabaseSourceDraft(BaseModel):
+    name: str = Field(min_length=1, max_length=63, pattern=r"^[a-z][a-z0-9_]*$")
+    grant: str = Field(min_length=1, max_length=64)
+    project_ref: str = Field(pattern=r"^[a-z]{20}$")
+
+
+def _supabase_redirect_uri(request: Request) -> str:
+    """Where Supabase sends the browser back: this server, as the browser sees it.
+
+    ROWFIRE_PUBLIC_URL wins, for a proxy that rewrites the host. It must match
+    a callback URL registered on the OAuth app exactly.
+    """
+    base = os.environ.get(PUBLIC_URL_ENV, "").strip().rstrip("/")
+    if not base:
+        base = str(request.base_url).rstrip("/")
+    return f"{base}{SUPABASE_CALLBACK_PATH}"
+
+
+@router.get("/sources/supabase")
+def supabase_status() -> dict[str, Any]:
+    """Whether "Connect Supabase" can be offered, and how."""
+    return {
+        "oauth": supabase.oauth_client() is not None and not hosted.enabled(),
+        "access_token": bool(os.environ.get(supabase.ACCESS_TOKEN_ENV, "").strip()),
+    }
+
+
+@router.post("/sources/supabase/authorize")
+def supabase_authorize(payload: SupabaseAuthorize, request: Request, response: Response):
+    """Start the OAuth flow: the URL to send the browser to.
+
+    The state and the PKCE verifier ride in a short-lived cookie, encrypted
+    with the master key, rather than in server memory -- so the callback
+    works whichever process answers it, and a forged callback without the
+    cookie is refused.
+    """
+    _require_platform()
+    _require_write()
+    _require_own_sources()
+    client = supabase.oauth_client()
+    if client is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Supabase OAuth is not configured on this server. Set "
+            f"{supabase.CLIENT_ID_ENV} and {supabase.CLIENT_SECRET_ENV}.",
+        )
+
+    state = secrets.token_urlsafe(24)
+    verifier, challenge = supabase.pkce_pair()
+    redirect_uri = _supabase_redirect_uri(request)
+    flow = {
+        "state": state,
+        "verifier": verifier,
+        "name": payload.name,
+        "redirect_uri": redirect_uri,
+        "workspace": tenancy.current().hex,
+        "started": datetime.now(UTC).isoformat(),
+    }
+    response.set_cookie(
+        _SUPABASE_FLOW_COOKIE,
+        oauth.seal_flow(flow),
+        max_age=_SUPABASE_FLOW_SECONDS,
+        httponly=True,
+        secure=redirect_uri.startswith("https://"),
+        samesite="lax",
+        path="/",
+    )
+    return {"url": supabase.authorize_url(client, redirect_uri, state, challenge)}
+
+
+def supabase_callback(request: Request) -> Response:
+    """Supabase's redirect back: trade the code for tokens and keep them.
+
+    Mounted outside /api (see create_app) at the exact URL registered on the
+    OAuth app. Always answers with a redirect into the UI, which then asks
+    which project to read; an error rides along as a query parameter rather
+    than as a bare JSON page the person cannot do anything with.
+    """
+    from urllib.parse import urlencode
+
+    from fastapi.responses import RedirectResponse
+
+    def back(**params: str) -> Response:
+        redirect = RedirectResponse(f"/sources?{urlencode(params)}", status_code=303)
+        redirect.delete_cookie(_SUPABASE_FLOW_COOKIE, path="/")
+        return redirect
+
+    query = request.query_params
+    if query.get("error"):
+        reason = query.get("error_description") or query.get("error") or "access denied"
+        return back(supabase_error=f"Supabase did not grant access: {reason[:200]}")
+
+    try:
+        flow = oauth.open_flow(request.cookies.get(_SUPABASE_FLOW_COOKIE, ""))
+    except oauth.GrantError:
+        return back(
+            supabase_error="The Supabase sign-in expired or was started elsewhere. Try again."
+        )
+
+    started = datetime.fromisoformat(flow["started"])
+    if datetime.now(UTC) - started > timedelta(seconds=_SUPABASE_FLOW_SECONDS):
+        return back(supabase_error="The Supabase sign-in took too long. Try again.")
+    if not secrets.compare_digest(str(query.get("state", "")), flow["state"]):
+        return back(supabase_error="The Supabase sign-in did not match this browser. Try again.")
+    if flow["workspace"] != tenancy.current().hex:
+        return back(supabase_error="The Supabase sign-in belongs to another workspace.")
+    code = query.get("code")
+    if not code:
+        return back(supabase_error="Supabase sent no authorization code.")
+
+    client = supabase.oauth_client()
+    if client is None:
+        return back(supabase_error="Supabase OAuth is not configured on this server.")
+    try:
+        tokens = supabase.exchange_code(client, code, flow["verifier"], flow["redirect_uri"])
+    except supabase.SupabaseError as exc:
+        return back(supabase_error=f"Could not finish connecting Supabase: {exc}")
+
+    with platform_db.session_scope() as session:
+        grant = oauth.save_grant(session, tokens, workspace_id=tenancy.current())
+        grant_id = grant.id.hex
+    return back(supabase_grant=grant_id, name=flow["name"])
+
+
+def _grant_token(grant_id: str) -> str:
+    """An access token for a grant in this workspace, or an HTTP error."""
+    with platform_db.session_scope() as session:
+        grant = oauth.get_grant(session, grant_id, workspace_id=tenancy.current())
+        if grant is None:
+            raise HTTPException(status_code=404, detail="That Supabase connection has expired.")
+        try:
+            return oauth.fresh_tokens(session, grant.id).access_token
+        except (oauth.GrantError, crypto.CryptoError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/sources/supabase/projects")
+def supabase_projects(grant: str) -> dict[str, Any]:
+    """The projects a fresh grant can read, for the person to pick one."""
+    _require_platform()
+    token = _grant_token(grant)
+    try:
+        projects = supabase.list_projects(token)
+    except supabase.SupabaseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"projects": projects}
+
+
+@router.post("/sources/supabase", response_model=ConnectResponse)
+def add_supabase_source(draft: SupabaseSourceDraft) -> ConnectResponse:
+    """Store a picked project as a source that reads through the grant."""
+    _require_platform()
+    _require_write()
+    _require_own_sources()
+    _grant_token(draft.grant)  # the grant exists, is ours, and still works
+    grant_id = uuid.UUID(draft.grant).hex
+    return _add_source(draft.name, supabase.make_dsn(draft.project_ref, grant_id))
 
 
 def _try_load_current() -> Definitions | None:
@@ -2119,6 +2298,8 @@ def create_app(session: Session | None = None, dev_origin: str | None = None) ->
         return await call_next(request)
 
     app.include_router(router)
+    # Outside /api, at the exact URL registered on the Supabase OAuth app.
+    app.add_api_route(SUPABASE_CALLBACK_PATH, supabase_callback, methods=["GET"])
 
     if hosted.enabled():
         # A public instance shares its sample database with every visitor.

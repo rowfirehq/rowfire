@@ -8,6 +8,7 @@ import {
   type SourceInfo,
   type SourceKind,
   type SuggestedSource,
+  type SupabaseProject,
 } from "../api";
 import { BrandIcon, engineLabel } from "../components/BrandIcon";
 import { Link } from "../components/Link";
@@ -17,7 +18,10 @@ import { Review } from "../steps/Review";
 
 /* Data sources: the databases Rowfire reads.
  *
- * Any number of them, Postgres or MySQL, each a named read-only connection.
+ * Any number of them, Postgres, MySQL or Supabase, each a named read-only
+ * connection. A Supabase project can also be connected with OAuth instead of
+ * a connection string: Supabase sends the browser back here with a grant, and
+ * the person picks which project to read.
  * A trigger names the one it reads; a trigger that names none reads the
  * default -- `primary`, or the first source added.
  *
@@ -32,7 +36,23 @@ function kindOfDsn(dsn: string): SourceKind | null {
   if (!dsn.includes("://")) return null;
   if (["postgres", "postgresql", "postgresql+psycopg"].includes(scheme)) return "postgres";
   if (["mysql", "mysql+pymysql", "mariadb"].includes(scheme)) return "mysql";
+  if (scheme === "supabase") return "supabase";
   return null;
+}
+
+/** What Supabase's OAuth redirect left in the URL, read once and then cleared. */
+interface SupabaseReturn {
+  grant: string | null;
+  name: string | null;
+  error: string | null;
+}
+
+function readSupabaseReturn(): SupabaseReturn | null {
+  const params = new URLSearchParams(window.location.search);
+  const grant = params.get("supabase_grant");
+  const error = params.get("supabase_error");
+  if (!grant && !error) return null;
+  return { grant, name: params.get("name"), error };
 }
 
 /** `selected` comes from the URL: /sources/<name>. */
@@ -53,6 +73,16 @@ export function Sources({
   // The hosted demo connects every visitor to the sample databases, and the
   // server refuses any other; there is nothing to add or remove.
   const [fixed, setFixed] = useState(false);
+  const [supabaseReturn, setSupabaseReturn] = useState<SupabaseReturn | null>(readSupabaseReturn);
+  const picking = supabaseReturn?.grant ? supabaseReturn : null;
+
+  // Out of the address bar once read, so a reload does not replay a used grant.
+  // An effect rather than the initializer, which must stay pure.
+  useEffect(() => {
+    if (window.location.search.includes("supabase_")) {
+      window.history.replaceState(window.history.state, "", window.location.pathname);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -85,7 +115,8 @@ export function Sources({
   const current = items.find((s) => s.name === selected) ?? null;
   const missing = loaded && selected !== null && current === null;
   // With nothing connected yet there is only one useful thing to show.
-  const showAdd = !fixed && (adding || (loaded && items.length === 0));
+  const showAdd =
+    !fixed && !picking && (adding || supabaseReturn !== null || (loaded && items.length === 0));
 
   return (
     <div className="rules">
@@ -111,7 +142,7 @@ export function Sources({
         )}
 
         {loaded && items.length === 0 && (
-          <p className="hint">None yet. Add a Postgres or MySQL database to start.</p>
+          <p className="hint">None yet. Add a Postgres, MySQL or Supabase database to start.</p>
         )}
 
         {items.map((source) => (
@@ -154,28 +185,51 @@ export function Sources({
           </div>
         )}
 
-        {showAdd && (
-          <AddSource
-            first={items.length === 0}
+        {picking && (
+          <PickSupabaseProject
+            grant={picking.grant ?? ""}
+            name={picking.name ?? (items.length === 0 ? "primary" : "supabase")}
             taken={items.map((s) => s.name)}
-            suggested={suggested}
-            onCancel={items.length > 0 ? () => setAdding(false) : undefined}
+            onCancel={() => setSupabaseReturn(null)}
             onSaved={async (name) => {
-              setAdding(false);
+              setSupabaseReturn(null);
               await load();
               navigate(href("sources", name));
             }}
           />
         )}
 
-        {!showAdd && missing && (
+        {showAdd && (
+          <AddSource
+            first={items.length === 0}
+            taken={items.map((s) => s.name)}
+            suggested={suggested}
+            supabaseError={supabaseReturn?.error ?? null}
+            onCancel={
+              items.length > 0
+                ? () => {
+                    setAdding(false);
+                    setSupabaseReturn(null);
+                  }
+                : undefined
+            }
+            onSaved={async (name) => {
+              setAdding(false);
+              setSupabaseReturn(null);
+              await load();
+              navigate(href("sources", name));
+            }}
+          />
+        )}
+
+        {!showAdd && !picking && missing && (
           <div className="card">
             <h2>No data source called {selected}</h2>
             <p className="hint">It may have been deleted. Pick one from the list, or add it.</p>
           </div>
         )}
 
-        {!showAdd && current && (
+        {!showAdd && !picking && current && (
           <SourceDetail
             key={current.name}
             source={current}
@@ -187,13 +241,13 @@ export function Sources({
           />
         )}
 
-        {!showAdd && !current && !missing && loaded && (
+        {!showAdd && !picking && !current && !missing && loaded && (
           <>
             <div className="card">
               <h2>Data sources</h2>
               <p className="hint">
                 A <strong>data source</strong> is a database Rowfire reads, through a
-                read-only connection: PostgreSQL or MySQL, as many as you need. Each
+                read-only connection: PostgreSQL, MySQL or Supabase, as many as you need. Each
                 trigger names the source its query runs against, so one rule can
                 watch your orders in Postgres while another watches tickets in MySQL.
               </p>
@@ -232,12 +286,15 @@ function AddSource({
   first,
   taken,
   suggested,
+  supabaseError,
   onCancel,
   onSaved,
 }: {
   first: boolean;
   taken: string[];
   suggested: SuggestedSource[];
+  /** Why the last "Connect Supabase" did not finish, from the redirect back. */
+  supabaseError: string | null;
   onCancel?: () => void;
   onSaved: (name: string) => void;
 }) {
@@ -248,9 +305,31 @@ function AddSource({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [supabaseOAuth, setSupabaseOAuth] = useState(false);
+  const [redirecting, setRedirecting] = useState(false);
+
+  useEffect(() => {
+    api
+      .supabaseStatus()
+      .then((status) => setSupabaseOAuth(status.oauth))
+      .catch(() => undefined);
+  }, []);
+
   const kind = kindOfDsn(dsn);
   const replacing = taken.includes(name);
   const canSave = Boolean(NAME_PATTERN.test(name) && dsn.trim() && kind);
+
+  async function connectSupabase() {
+    setRedirecting(true);
+    setError(null);
+    try {
+      const { url } = await api.supabaseAuthorize(name);
+      window.location.assign(url);
+    } catch (exc) {
+      setError(exc instanceof ApiError ? exc.message : String(exc));
+      setRedirecting(false);
+    }
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -277,8 +356,37 @@ function AddSource({
         the database itself, not by convention.
       </p>
 
+      {supabaseError && (
+        <div className="notice bad">
+          <div className="notice-head">
+            <span aria-hidden="true">✕</span> Supabase was not connected
+          </div>
+          {supabaseError}
+        </div>
+      )}
+
+      {supabaseOAuth && (
+        <div className="row" style={{ alignItems: "center", gap: 12, marginBottom: 14 }}>
+          <button
+            type="button"
+            className="btn"
+            disabled={!NAME_PATTERN.test(name) || redirecting}
+            onClick={connectSupabase}
+          >
+            <span className="with-icon">
+              <BrandIcon name="supabase" size="sm" label="" />
+              {redirecting ? "Opening Supabase…" : "Connect Supabase"}
+            </span>
+          </button>
+          <span className="footnote">
+            No password: approve read-only access in Supabase, then pick a project.
+            Supabase runs every query as its own read-only user.
+          </span>
+        </div>
+      )}
+
       <div className="engine-row" aria-label="Supported databases">
-        {(["postgres", "mysql"] as const).map((engine) => (
+        {(["postgres", "mysql", "supabase"] as const).map((engine) => (
           <span key={engine} className={`engine-chip${kind === engine ? " on" : ""}`}>
             <BrandIcon name={engine} size="sm" label="" />
             {engineLabel(engine)}
@@ -319,7 +427,7 @@ function AddSource({
                 id="source-dsn"
                 type="password"
                 value={dsn}
-                placeholder="postgresql://… or mysql://…"
+                placeholder="postgresql://…, mysql://… or supabase://<project ref>"
                 autoComplete="off"
                 spellCheck={false}
                 onChange={(e) => setDsn(e.target.value)}
@@ -328,7 +436,9 @@ function AddSource({
             </div>
             <p className="footnote" style={{ marginTop: 6 }}>
               {dsn && !kind
-                ? "Start it with postgresql:// or mysql://."
+                ? "Start it with postgresql://, mysql:// or supabase://."
+                : kind === "supabase"
+                  ? "Read with the server's SUPABASE_ACCESS_TOKEN. Use Connect Supabase to sign in instead."
                 : "Stored encrypted. It is never shown again, or sent back to this page."}
             </p>
           </div>
@@ -375,6 +485,140 @@ function AddSource({
               cancel
             </button>
           )}
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ supabase */
+
+/** After Supabase's consent screen: which project should this source read? */
+function PickSupabaseProject({
+  grant,
+  name: initialName,
+  taken,
+  onCancel,
+  onSaved,
+}: {
+  grant: string;
+  name: string;
+  taken: string[];
+  onCancel: () => void;
+  onSaved: (name: string) => void;
+}) {
+  const [name, setName] = useState(initialName);
+  const [projects, setProjects] = useState<SupabaseProject[] | null>(null);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .supabaseProjects(grant)
+      .then((listed) => {
+        setProjects(listed.projects);
+        if (listed.projects.length === 1) setChosen(listed.projects[0].ref);
+      })
+      .catch((exc) => setError(exc instanceof ApiError ? exc.message : String(exc)));
+  }, [grant]);
+
+  const replacing = taken.includes(name);
+  const canSave = Boolean(NAME_PATTERN.test(name) && chosen) && !busy;
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!chosen) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const added = await api.addSupabaseSource(name, grant, chosen);
+      onSaved(added.name);
+    } catch (exc) {
+      setError(exc instanceof ApiError ? exc.message : String(exc));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="with-icon" style={{ gap: 12, marginBottom: 6 }}>
+        <BrandIcon name="supabase" size="md" label="" />
+        <h2 style={{ margin: 0 }}>Pick a Supabase project</h2>
+      </div>
+      <p className="hint">
+        Supabase granted read-only access. Choose the project this source reads; its
+        queries run through Supabase as <code>supabase_read_only_user</code>, so a write
+        is refused by Supabase itself.
+      </p>
+
+      <form onSubmit={submit}>
+        {projects === null && !error && <p className="hint">Loading your projects…</p>}
+        {projects !== null && projects.length === 0 && (
+          <p className="hint">This Supabase account has no projects Rowfire can see.</p>
+        )}
+        {projects !== null && projects.length > 0 && (
+          <div role="radiogroup" aria-label="Supabase projects" style={{ marginBottom: 12 }}>
+            {projects.map((project) => (
+              <label
+                key={project.ref}
+                className={`rule-card${chosen === project.ref ? " active" : ""}`}
+                style={{ display: "block", cursor: "pointer" }}
+              >
+                <input
+                  type="radio"
+                  name="supabase-project"
+                  value={project.ref}
+                  checked={chosen === project.ref}
+                  onChange={() => setChosen(project.ref)}
+                  style={{ marginRight: 8 }}
+                />
+                <strong>{project.name ?? project.ref}</strong>
+                <div className="muted" style={{ fontSize: 12 }}>
+                  {[project.organization, project.region, project.ref].filter(Boolean).join(" · ")}
+                  {project.status && project.status !== "ACTIVE_HEALTHY" && ` · ${project.status}`}
+                </div>
+              </label>
+            ))}
+          </div>
+        )}
+
+        <label className="field" htmlFor="supabase-source-name">
+          Name
+        </label>
+        <input
+          id="supabase-source-name"
+          type="text"
+          value={name}
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <p className="footnote" style={{ marginTop: 6 }}>
+          {name && !NAME_PATTERN.test(name)
+            ? "Lowercase letters, digits and _, starting with a letter."
+            : replacing
+              ? `Replaces the connection stored as ${name}.`
+              : "What a trigger writes as source: to read it."}
+        </p>
+
+        {error && (
+          <div className="notice bad" style={{ marginTop: 12 }}>
+            <div className="notice-head">
+              <span aria-hidden="true">✕</span> Could not connect
+            </div>
+            {error}
+          </div>
+        )}
+
+        <div className="row" style={{ marginTop: 16 }}>
+          <button className="btn primary" disabled={!canSave}>
+            {busy ? "Connecting…" : replacing ? "Replace connection" : "Connect project"}
+          </button>
+          <button type="button" className="linkish" onClick={onCancel}>
+            cancel
+          </button>
         </div>
       </form>
     </div>
@@ -459,7 +703,9 @@ function SourceDetail({
             <div className="value" style={{ fontSize: 18 }}>
               {source.label}
             </div>
-            <div className="sub">read-only session</div>
+            <div className="sub">
+              {source.kind === "supabase" ? "Supabase's read-only user" : "read-only session"}
+            </div>
           </div>
           <div className="stat">
             <div className="label">Tables</div>
