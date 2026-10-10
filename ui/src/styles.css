@@ -591,6 +591,13 @@ textarea {
   background: var(--series-1-wash);
 }
 
+/* An engine this server cannot read until it is configured. */
+.engine-chip.off {
+  opacity: 0.35;
+  border-style: dashed;
+  cursor: help;
+}
+
 /* Choosing the source a trigger reads: one button per source. */
 .source-picker {
   display: flex;

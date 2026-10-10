@@ -40,6 +40,13 @@ function kindOfDsn(dsn: string): SourceKind | null {
   return null;
 }
 
+const SUPABASE_OAUTH_HINT =
+  "Not set up on this server: set SUPABASE_OAUTH_CLIENT_ID and " +
+  "SUPABASE_OAUTH_CLIENT_SECRET to sign in with Supabase.";
+const SUPABASE_OFF_HINT =
+  "Supabase is not set up on this server: set SUPABASE_OAUTH_CLIENT_ID and " +
+  "SUPABASE_OAUTH_CLIENT_SECRET, or SUPABASE_ACCESS_TOKEN.";
+
 /** What Supabase's OAuth redirect left in the URL, read once and then cleared. */
 interface SupabaseReturn {
   grant: string | null;
@@ -311,19 +318,31 @@ function AddSource({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [supabaseOAuth, setSupabaseOAuth] = useState(false);
+  // What the server can do with Supabase; null until it has answered, so the
+  // options are not shown dimmed for a moment on every open.
+  const [supabaseStatus, setSupabaseStatus] = useState<{
+    oauth: boolean;
+    access_token: boolean;
+  } | null>(null);
   const [redirecting, setRedirecting] = useState(false);
 
   useEffect(() => {
     api
       .supabaseStatus()
-      .then((status) => setSupabaseOAuth(status.oauth))
-      .catch(() => undefined);
+      .then(setSupabaseStatus)
+      .catch(() => setSupabaseStatus({ oauth: false, access_token: false }));
   }, []);
+  const supabaseOAuth = supabaseStatus?.oauth ?? false;
+  // Neither a sign-in nor a server token: Supabase cannot be read at all.
+  const supabaseOff =
+    supabaseStatus !== null && !supabaseStatus.oauth && !supabaseStatus.access_token;
+  const tokenMissing = supabaseStatus !== null && !supabaseStatus.access_token;
 
   const kind = kindOfDsn(dsn);
   const replacing = taken.includes(name);
-  const canSave = Boolean(NAME_PATTERN.test(name) && dsn.trim() && kind);
+  const canSave = Boolean(
+    NAME_PATTERN.test(name) && dsn.trim() && kind && !(kind === "supabase" && tokenMissing),
+  );
 
   async function connectSupabase() {
     setRedirecting(true);
@@ -371,12 +390,13 @@ function AddSource({
         </div>
       )}
 
-      {supabaseOAuth && (
+      {supabaseStatus !== null && (
         <div className="row" style={{ alignItems: "center", gap: 12, marginBottom: 14 }}>
           <button
             type="button"
             className="btn"
-            disabled={!NAME_PATTERN.test(name) || redirecting}
+            disabled={!supabaseOAuth || !NAME_PATTERN.test(name) || redirecting}
+            title={supabaseOAuth ? undefined : SUPABASE_OAUTH_HINT}
             onClick={connectSupabase}
           >
             <span className="with-icon">
@@ -385,15 +405,23 @@ function AddSource({
             </span>
           </button>
           <span className="footnote">
-            No password: approve read-only access in Supabase, then pick a project.
-            Supabase runs every query as its own read-only user.
+            {supabaseOAuth
+              ? "No password: approve read-only access in Supabase, then pick a project. " +
+                "Supabase runs every query as its own read-only user."
+              : SUPABASE_OAUTH_HINT}
           </span>
         </div>
       )}
 
       <div className="engine-row" aria-label="Supported databases">
         {(["postgres", "mysql", "supabase"] as const).map((engine) => (
-          <span key={engine} className={`engine-chip${kind === engine ? " on" : ""}`}>
+          <span
+            key={engine}
+            className={`engine-chip${kind === engine ? " on" : ""}${
+              engine === "supabase" && supabaseOff ? " off" : ""
+            }`}
+            title={engine === "supabase" && supabaseOff ? SUPABASE_OFF_HINT : undefined}
+          >
             <BrandIcon name={engine} size="sm" label="" />
             {engineLabel(engine)}
           </span>
@@ -443,6 +471,10 @@ function AddSource({
             <p className="footnote" style={{ marginTop: 6 }}>
               {dsn && !kind
                 ? "Start it with postgresql://, mysql:// or supabase://."
+                : kind === "supabase" && tokenMissing
+                  ? supabaseOAuth
+                    ? "This server has no SUPABASE_ACCESS_TOKEN. Use Connect Supabase instead."
+                    : SUPABASE_OFF_HINT
                 : kind === "supabase"
                   ? "Read with the server's SUPABASE_ACCESS_TOKEN. Use Connect Supabase to sign in instead."
                 : "Stored encrypted. It is never shown again, or sent back to this page."}
