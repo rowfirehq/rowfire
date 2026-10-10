@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { ApiError, EXPIRED_FLAG, api } from "./api";
 import { Link } from "./components/Link";
 import { Logo } from "./components/Logo";
+import { feedbackHandled } from "./moments";
 import { href, navigate, useRoute, type View } from "./router";
 import { Live } from "./steps/Live";
 import { Inbox } from "./views/Inbox";
@@ -255,7 +256,15 @@ export function App() {
               data and delivers to the Demo inbox.
             </span>
             {demo.feedback && (
-              <a className="btn" href={demo.feedback} target="_blank" rel="noreferrer">
+              <a
+                className="btn"
+                href={demo.feedback}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(event) => {
+                  if (feedbackHandled()) event.preventDefault();
+                }}
+              >
                 Give feedback
               </a>
             )}

@@ -4,6 +4,7 @@ import { ApiError, api, type Inbox as InboxData, type InboxItem } from "../api";
 import { BrandIcon } from "../components/BrandIcon";
 import { Link } from "../components/Link";
 import { SimulateButton } from "../components/SimulateButton";
+import { moment } from "../moments";
 import { href } from "../router";
 
 /* The Demo inbox: where a rule's messages land when nothing real is connected.
@@ -205,8 +206,12 @@ export function Inbox() {
 
   const load = useCallback(async () => {
     try {
-      setData(await api.inbox());
+      const inbox = await api.inbox();
+      setData(inbox);
       setError(null);
+      if (inbox.items.some((item) => item.mode === "live" && item.status === "sent")) {
+        moment("first_delivery");
+      }
     } catch (exc) {
       setError(exc instanceof ApiError ? exc.message : String(exc));
     }

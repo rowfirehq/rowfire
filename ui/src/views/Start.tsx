@@ -12,6 +12,7 @@ import {
 import { BrandIcon } from "../components/BrandIcon";
 import { Link } from "../components/Link";
 import { SimulateButton } from "../components/SimulateButton";
+import { moment } from "../moments";
 import { href } from "../router";
 import { InboxEntry } from "./Inbox";
 
@@ -348,7 +349,9 @@ export function Start({ onConnected }: { onConnected: (has: boolean) => void }) 
         const inbox = await api.inbox();
         // The rule is new, so everything it has delivered arrived after it
         // went live -- no clock comparison between browser and server needed.
-        setArrived(inbox.items.filter((item) => item.rule === ruleName && item.status === "sent"));
+        const mine = inbox.items.filter((item) => item.rule === ruleName && item.status === "sent");
+        setArrived(mine);
+        if (mine.length > 0) moment("first_delivery");
       } catch {
         // The next tick will try again; a blip is not worth a banner.
       }
