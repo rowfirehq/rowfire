@@ -2,7 +2,11 @@
 """Render a ~20s vertical (1080x1920) YouTube Short for one Rowfire use case.
 
 Usage:
-    python3 tools/usecase_video.py <path/to/use-case.md> <out.mp4>
+    python3 tools/usecase_video.py <path/to/use-case.md> <out.mp4> [--hook "Opening line"]
+
+--hook replaces the page title on the first slide with the post's opening
+line (a question or a scenario), so the Short opens the same way the post
+does. Keep it under ~70 characters.
 
 The input is a use-case page from rowfirehq/rowfire-site
 (src/content/use-cases/<slug>.md). Everything shown comes from its
@@ -143,18 +147,20 @@ def wrap_sql(lines, cpl):
     return out
 
 
-def slide_hook(fm, slug):
+def slide_hook(fm, slug, hook=None):
     img, d = new_slide()
     header(img, d)
     y = 600
-    f = font("semibold", 36)
-    team = f"USE CASE  ·  {fm['team'].upper()}"
-    d.text((M, y), team, font=f, fill=BRAND)
+    team = f"FOR {fm['team'].upper()} TEAMS"
+    d.text((M, y), team, font=font("semibold", 36), fill=BRAND)
     y += 90
-    y = text_block(d, (M, y), fm["title"], font("bold", 92), TEXT, W - 2 * M, 1.12)
-    y += 50
-    text_block(d, (M, y), fm["description"], font("regular", 44), TEXT_2, W - 2 * M, 1.4)
-    footer(d, slug)
+    headline = hook or fm["title"]
+    size = 92 if len(headline) <= 60 else 76
+    y = text_block(d, (M, y), headline, font("bold", size), TEXT, W - 2 * M, 1.12)
+    if not hook:
+        y += 50
+        text_block(d, (M, y), fm["description"], font("regular", 44), TEXT_2, W - 2 * M, 1.4)
+        footer(d, slug)
     return img
 
 
@@ -284,12 +290,12 @@ def slide_cta(fm, slug):
     return img
 
 
-def main(src, out):
+def main(src, out, hook=None):
     raw = open(src, encoding="utf-8").read()
     fm = yaml.safe_load(raw.split("---", 2)[1])
     slug = os.path.splitext(os.path.basename(src))[0]
     slides = [  # (image, seconds on screen)
-        (slide_hook(fm, slug), 4.5),
+        (slide_hook(fm, slug, hook), 5.0),
         (slide_sql(fm, slug), 6.0),
         (slide_rule(fm, slug), 5.0),
         (slide_safe(fm, slug), 4.5),
@@ -328,6 +334,12 @@ def main(src, out):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
+    args = sys.argv[1:]
+    hook = None
+    if "--hook" in args:
+        i = args.index("--hook")
+        hook = args[i + 1].strip()
+        del args[i:i + 2]
+    if len(args) != 2:
         sys.exit(__doc__)
-    main(sys.argv[1], sys.argv[2])
+    main(args[0], args[1], hook)
