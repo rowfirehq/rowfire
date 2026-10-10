@@ -360,6 +360,18 @@ def test_a_rejected_token_says_to_reconnect(fake, monkeypatch) -> None:
             conn.fetch("SELECT 1 AS one", {})
 
 
+def test_a_wrong_client_secret_names_the_oauth_app_not_a_project(fake, monkeypatch) -> None:
+    monkeypatch.setenv(supabase.CLIENT_SECRET_ENV, "sba_truncated")
+    client = supabase.oauth_client()
+    assert client is not None
+    with pytest.raises(supabase.SupabaseError) as raised:
+        supabase.exchange_code(client, "the-code", "verifier", "http://localhost/cb")
+    message = str(raised.value)
+    assert "OAuth app" in message and supabase.CLIENT_SECRET_ENV in message
+    assert "project" not in message
+    assert "sba_truncated" not in message
+
+
 # ----------------------------------------------------------- OAuth grants
 
 
@@ -486,6 +498,21 @@ def test_connect_supabase_end_to_end_through_the_api(fake, platform) -> None:
         )
         assert wrong.status_code == 303 and "supabase_error" in wrong.headers["location"]
         assert fake.token_requests == []
+
+        # A failed exchange comes back with the name that was typed, so the
+        # form does not fall back to `primary` and offer to replace it.
+        started = client.post("/api/sources/supabase/authorize", json={"name": "warehouse"})
+        state = parse_qs(urlsplit(started.json()["url"]).query)["state"][-1]
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setenv(supabase.CLIENT_SECRET_ENV, "wrong-secret")
+            failed = client.get(
+                "/oauth/supabase/callback",
+                params={"code": "the-code", "state": state},
+                follow_redirects=False,
+            )
+        location = parse_qs(urlsplit(failed.headers["location"]).query)
+        assert location["name"] == ["warehouse"]
+        assert "OAuth app" in location["supabase_error"][-1]
 
         started = client.post("/api/sources/supabase/authorize", json={"name": "primary"})
         state = parse_qs(urlsplit(started.json()["url"]).query)["state"][-1]

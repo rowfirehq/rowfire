@@ -504,8 +504,10 @@ they do on Postgres; the SQL is Postgres SQL.
 - **Connect with OAuth.** Register an OAuth app in your Supabase organization
   (*Organization settings → OAuth Apps*) with **Projects: Read** and
   **Database: Read**, and nothing else, and callback URLs for each address
-  you open Rowfire at: `http://127.0.0.1:8000/oauth/supabase/callback` and
-  `http://localhost:8000/oauth/supabase/callback` (or your own address, set as
+  you open Rowfire at, such as `http://localhost:8000/oauth/supabase/callback`.
+  Supabase accepts plain `http://` only for `localhost`, not `127.0.0.1`, so
+  open Rowfire at `localhost` or set `ROWFIRE_PUBLIC_URL` to it; anywhere
+  else, the callback must be `https://` (your own address, set as
   `ROWFIRE_PUBLIC_URL`). Then set `SUPABASE_OAUTH_CLIENT_ID` and
   `SUPABASE_OAUTH_CLIENT_SECRET`, and **Data sources** offers *Connect
   Supabase*: approve, pick a project, done. The tokens are stored encrypted

@@ -72,8 +72,11 @@ _ALIAS = "rowfire_q"
 class SupabaseError(Exception):
     """A Management API problem. Never carries a token or a client secret."""
 
-    def __init__(self, message: str, status: int | None = None) -> None:
+    def __init__(self, message: str, status: int | None = None, detail: str = "") -> None:
         self.status = status
+        # Supabase's own reason, when it gave one, for callers that word the
+        # error for their context rather than relaying the generic message.
+        self.detail = detail
         super().__init__(message)
 
 
@@ -150,7 +153,10 @@ def _request(
         with urllib.request.urlopen(request, timeout=_TIMEOUT_SECONDS) as response:
             body = response.read()
     except urllib.error.HTTPError as exc:
-        raise SupabaseError(_http_message(exc), status=exc.code) from None
+        detail = _http_detail(exc)
+        raise SupabaseError(
+            _http_message(exc.code, detail), status=exc.code, detail=detail
+        ) from None
     except urllib.error.URLError as exc:
         raise SupabaseError(f"could not reach Supabase: {exc.reason}") from None
     except TimeoutError:
@@ -163,7 +169,7 @@ def _request(
     return json.loads(body, parse_float=Decimal)
 
 
-def _http_message(exc: urllib.error.HTTPError) -> str:
+def _http_detail(exc: urllib.error.HTTPError) -> str:
     detail = ""
     try:
         payload = json.loads(exc.read() or b"null")
@@ -171,14 +177,17 @@ def _http_message(exc: urllib.error.HTTPError) -> str:
             detail = str(payload.get("message") or payload.get("error") or "")
     except (ValueError, OSError):
         pass
-    detail = detail.strip().split("\n")[0][:300]
-    if exc.code == 401:
+    return detail.strip().split("\n")[0][:300]
+
+
+def _http_message(code: int, detail: str) -> str:
+    if code == 401:
         return "Supabase refused the token (401). Reconnect the Supabase source."
-    if exc.code == 403:
+    if code == 403:
         return f"Supabase refused access to this project (403){': ' + detail if detail else ''}"
-    if exc.code == 429:
+    if code == 429:
         return "Supabase rate-limited this request (429). Polls will retry on the next tick."
-    return f"Supabase returned {exc.code}{': ' + detail if detail else ''}"
+    return f"Supabase returned {code}{': ' + detail if detail else ''}"
 
 
 def _json_param(value: Any) -> Any:
@@ -320,11 +329,30 @@ def refresh(client: OAuthClient, refresh_token: str) -> Tokens:
 
 
 def _token_request(client: OAuthClient, fields: dict[str, str]) -> Tokens:
-    payload = _request(
-        "POST",
-        "/v1/oauth/token",
-        form={"client_id": client.client_id, "client_secret": client.client_secret, **fields},
-    )
+    try:
+        payload = _request(
+            "POST",
+            "/v1/oauth/token",
+            form={"client_id": client.client_id, "client_secret": client.client_secret, **fields},
+        )
+    except SupabaseError as exc:
+        # The generic wording is about a project or a token; neither is what
+        # went wrong here, and "this project" sends people to the wrong place.
+        if exc.status is None or exc.status >= 500 or exc.status == 429:
+            raise
+        reason = f": {exc.detail}" if exc.detail else ""
+        if "client" in exc.detail.lower():
+            raise SupabaseError(
+                f"Supabase rejected this server's OAuth app ({exc.status}){reason}. "
+                f"Check {CLIENT_ID_ENV} and {CLIENT_SECRET_ENV}.",
+                status=exc.status,
+                detail=exc.detail,
+            ) from None
+        raise SupabaseError(
+            f"Supabase refused the token request ({exc.status}){reason}",
+            status=exc.status,
+            detail=exc.detail,
+        ) from None
     if not isinstance(payload, dict) or not payload.get("access_token"):
         raise SupabaseError("Supabase's token endpoint returned no access token")
     expires_in = int(payload.get("expires_in") or 3600)

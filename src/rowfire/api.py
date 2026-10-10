@@ -692,24 +692,29 @@ def supabase_callback(request: Request) -> Response:
             supabase_error="The Supabase sign-in expired or was started elsewhere. Try again."
         )
 
+    # From here on the name typed before leaving is known; an error carries it
+    # back so the form does not fall back to `primary`, which would replace it.
+    name = str(flow.get("name") or "")
     started = datetime.fromisoformat(flow["started"])
     if datetime.now(UTC) - started > timedelta(seconds=_SUPABASE_FLOW_SECONDS):
-        return back(supabase_error="The Supabase sign-in took too long. Try again.")
+        return back(supabase_error="The Supabase sign-in took too long. Try again.", name=name)
     if not secrets.compare_digest(str(query.get("state", "")), flow["state"]):
-        return back(supabase_error="The Supabase sign-in did not match this browser. Try again.")
+        return back(
+            supabase_error="The Supabase sign-in did not match this browser. Try again.", name=name
+        )
     if flow["workspace"] != tenancy.current().hex:
-        return back(supabase_error="The Supabase sign-in belongs to another workspace.")
+        return back(supabase_error="The Supabase sign-in belongs to another workspace.", name=name)
     code = query.get("code")
     if not code:
-        return back(supabase_error="Supabase sent no authorization code.")
+        return back(supabase_error="Supabase sent no authorization code.", name=name)
 
     client = supabase.oauth_client()
     if client is None:
-        return back(supabase_error="Supabase OAuth is not configured on this server.")
+        return back(supabase_error="Supabase OAuth is not configured on this server.", name=name)
     try:
         tokens = supabase.exchange_code(client, code, flow["verifier"], flow["redirect_uri"])
     except supabase.SupabaseError as exc:
-        return back(supabase_error=f"Could not finish connecting Supabase: {exc}")
+        return back(supabase_error=f"Could not finish connecting Supabase: {exc}", name=name)
 
     with platform_db.session_scope() as session:
         grant = oauth.save_grant(session, tokens, workspace_id=tenancy.current())

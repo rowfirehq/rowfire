@@ -115,8 +115,10 @@ export function Sources({
   const current = items.find((s) => s.name === selected) ?? null;
   const missing = loaded && selected !== null && current === null;
   // With nothing connected yet there is only one useful thing to show.
+  // A Supabase error waits for the list too: until it loads, `first` would be
+  // guessed, and a wrong guess names the new source `primary` and replaces it.
   const showAdd =
-    !fixed && !picking && (adding || supabaseReturn !== null || (loaded && items.length === 0));
+    !fixed && !picking && (adding || (loaded && (supabaseReturn !== null || items.length === 0)));
 
   return (
     <div className="rules">
@@ -204,6 +206,7 @@ export function Sources({
             first={items.length === 0}
             taken={items.map((s) => s.name)}
             suggested={suggested}
+            initialName={supabaseReturn?.name || null}
             supabaseError={supabaseReturn?.error ?? null}
             onCancel={
               items.length > 0
@@ -286,6 +289,7 @@ function AddSource({
   first,
   taken,
   suggested,
+  initialName,
   supabaseError,
   onCancel,
   onSaved,
@@ -293,6 +297,8 @@ function AddSource({
   first: boolean;
   taken: string[];
   suggested: SuggestedSource[];
+  /** The name typed before a "Connect Supabase" that came back with an error. */
+  initialName: string | null;
   /** Why the last "Connect Supabase" did not finish, from the redirect back. */
   supabaseError: string | null;
   onCancel?: () => void;
@@ -300,7 +306,7 @@ function AddSource({
 }) {
   // The first source is `primary` unless said otherwise, which is the name a
   // trigger with no `source:` reads.
-  const [name, setName] = useState(first ? "primary" : "");
+  const [name, setName] = useState(initialName ?? (first ? "primary" : ""));
   const [dsn, setDsn] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
