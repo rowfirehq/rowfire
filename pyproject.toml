@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "Turn database events into Slack, Zendesk and API actions: engineering defines the event once, everyone else subscribes"
 license = "AGPL-3.0"
 requires-python = ">=3.11"
+keywords = [
+    "sql", "postgresql", "mysql", "mariadb", "slack", "zendesk", "braze",
+    "alerts", "sql-alerts", "database-events", "webhooks", "automation",
+]
 dependencies = [
     "psycopg[binary]>=3.2",
     "pymysql>=1.1",
@@ -18,6 +22,11 @@ dependencies = [
     "alembic>=1.19.0",
     "cryptography>=50.0.0",
 ]
+
+[project.urls]
+Homepage = "https://rowfire.com"
+Demo = "https://demo.rowfire.com"
+Source = "https://github.com/rowfirehq/rowfire"
 
 [project.scripts]
 rowfire = "rowfire.cli:cli"

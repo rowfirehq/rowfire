@@ -5,6 +5,13 @@ events your tools act on: Slack messages and Zendesk tickets for your team,
 Braze events and campaigns for your customers, or a call to any REST API,
 without asking engineering to build each one.
 
+If you're looking for a way to **send a Slack alert when a SQL query returns
+new rows**, or to **open a Zendesk ticket for each one**, from PostgreSQL,
+MySQL or MariaDB, without the same row firing on every run: that is what this
+does. Step by step:
+[Slack](https://rowfire.com/blog/send-a-slack-alert-from-a-sql-query/),
+[Zendesk](https://rowfire.com/blog/create-zendesk-tickets-from-a-sql-query/).
+
 **[Try the live demo](https://demo.rowfire.com)** on sample data: nothing to
 install, no accounts to connect. More at [rowfire.com](https://rowfire.com).
 
