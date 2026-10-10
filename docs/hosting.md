@@ -192,6 +192,29 @@ how every self-hosted instance starts: Rowfire itself tracks nothing. The value
 goes into the page verbatim, so treat it like any other code you deploy, and
 tell your visitors what it collects.
 
+The app announces a few moments as browser events on `window`, so that markup
+can react to them without Rowfire knowing what listens (`ui/src/moments.ts`):
+
+| event | when |
+| --- | --- |
+| `rowfire:moment`, `detail.name` = `first_delivery` | a live rule delivered to the Demo inbox, once per page load |
+| `rowfire:feedback` | **Give feedback** was clicked; call `preventDefault()` to handle it in place, and the link is not followed |
+
+The rowfire.com demo uses them to show a PostHog survey, along these lines:
+
+```html
+<script>
+  let surveys = false;  // stays false when PostHog is blocked: the link is followed
+  posthog.onSurveysLoaded(() => { surveys = true; });
+  window.addEventListener('rowfire:moment', (e) => posthog.capture('rowfire_' + e.detail.name));
+  window.addEventListener('rowfire:feedback', (e) => {
+    if (!surveys) return;
+    e.preventDefault();
+    posthog.displaySurvey('<survey id>', { displayType: 'popover', ignoreConditions: true, ignoreDelay: true });
+  });
+</script>
+```
+
 ## What it does not do yet
 
 - **Visitors are anonymous.** Their workspace lives in one browser. There
