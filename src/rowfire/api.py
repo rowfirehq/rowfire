@@ -314,8 +314,9 @@ def health() -> dict[str, Any]:
             for name, kind, env in (
                 ("primary", "postgres", "ROWFIRE_DEMO_DSN"),
                 ("support", "mysql", "ROWFIRE_DEMO_MYSQL_DSN"),
+                ("supabase", "supabase", "ROWFIRE_DEMO_SUPABASE_DSN"),
             )
-            if (dsn := os.environ.get(env)) and not hosted.enabled()
+            if (dsn := os.environ.get(env)) and not hosted.enabled() and hosted.readable(dsn)
         ],
     }
 

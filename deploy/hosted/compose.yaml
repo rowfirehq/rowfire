@@ -19,6 +19,9 @@ x-rowfire-env: &rowfire-env
   ROWFIRE_HOSTED_DEFINITIONS: /demo/definitions.yaml
   ROWFIRE_DEMO_DSN: postgresql://rowfire_ro:rowfire_ro@sample:5432/rowfire_fixture
   ROWFIRE_DEMO_MYSQL_DSN: mysql://rowfire_ro:rowfire_ro@support:3306/rowfire_support
+  # Optional: a Supabase project every visitor reads (examples/saas/supabase.sql).
+  ROWFIRE_DEMO_SUPABASE_DSN: ${ROWFIRE_DEMO_SUPABASE_DSN:-}
+  SUPABASE_ACCESS_TOKEN: ${SUPABASE_ACCESS_TOKEN:-}
   ROWFIRE_DEMO_ACTIVITY_DSN: postgresql://rowfire:${SAMPLE_PASSWORD:-rowfire}@sample:5432/rowfire_fixture
   ROWFIRE_DEMO_ACTIVITY_SQL: /demo/activity.sql
   ROWFIRE_WORKSPACE_IDLE_HOURS: ${ROWFIRE_WORKSPACE_IDLE_HOURS:-24}

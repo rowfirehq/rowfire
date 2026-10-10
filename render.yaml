@@ -48,6 +48,13 @@ services:
         fromDatabase:
           name: rowfire-db
           property: connectionString
+      # Optional: a Supabase project every visitor reads (examples/saas/
+      # supabase.sql, docs/hosting.md). Render asks for both on the first
+      # deploy; leave them empty for a demo without Supabase.
+      - key: ROWFIRE_DEMO_SUPABASE_DSN
+        sync: false
+      - key: SUPABASE_ACCESS_TOKEN
+        sync: false
 
   - type: worker
     name: rowfire-demo-worker
@@ -64,6 +71,13 @@ services:
         fromDatabase:
           name: rowfire-db
           property: connectionString
+      # Optional: a Supabase project every visitor reads (examples/saas/
+      # supabase.sql, docs/hosting.md). Render asks for both on the first
+      # deploy; leave them empty for a demo without Supabase.
+      - key: ROWFIRE_DEMO_SUPABASE_DSN
+        sync: false
+      - key: SUPABASE_ACCESS_TOKEN
+        sync: false
 
 databases:
   - name: rowfire-db

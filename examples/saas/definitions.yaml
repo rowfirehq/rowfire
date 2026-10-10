@@ -131,6 +131,36 @@ triggers:
     event_time: created_at
     key: [id]
 
+  # A third source: the product itself runs on Supabase. Read through
+  # Supabase's read-only endpoint, with no database password; see
+  # examples/saas/supabase.sql for the tables and how to set it up.
+  free_workspace_near_quota:
+    description: A free workspace has used 80% of this month's API quota
+    source: supabase
+    sql: |
+      SELECT w.id AS workspace_id,
+             w.name,
+             w.owner_email,
+             w.monthly_quota,
+             c.month,
+             MIN(c.recorded_at) AS crossed_at
+      FROM workspaces w
+      JOIN (
+        SELECT u.workspace_id,
+               u.recorded_at,
+               date_trunc('month', u.recorded_at) AS month,
+               SUM(u.calls) OVER (
+                 PARTITION BY u.workspace_id, date_trunc('month', u.recorded_at)
+                 ORDER BY u.recorded_at
+               ) AS used
+        FROM api_usage u
+      ) c ON c.workspace_id = w.id
+      WHERE w.plan = 'free'
+        AND c.used >= 0.8 * w.monthly_quota
+      GROUP BY w.id, w.name, w.owner_email, w.monthly_quota, c.month
+    event_time: crossed_at
+    key: [workspace_id, month]
+
 rules:
   # One trigger, two cadences: billing wants a ticket per account per week,
   # the channel wants a heads-up at most once a day per account.
@@ -176,4 +206,9 @@ rules:
   escalate_unanswered_urgent:
     trigger: urgent_ticket_unanswered
     description: "Tell #support about every urgent ticket nobody has answered"
+    policy: once_ever
+
+  nudge_upgrade:
+    trigger: free_workspace_near_quota
+    description: "Tell #growth when a free workspace nears its quota, once a month each"
     policy: once_ever

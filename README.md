@@ -527,6 +527,12 @@ they do on Postgres; the SQL is Postgres SQL.
   steady poll is one HTTPS call.
 - **The endpoint is in beta** on Supabase's side, and rate-limited. A poll
   that is refused (429) fails that run and is retried on the next tick.
+- **A demo project.** [`examples/saas/supabase.sql`](examples/saas/supabase.sql)
+  sets up a Supabase project as the sample product's usage data, for the
+  `free_workspace_near_quota` trigger. Set `ROWFIRE_DEMO_SUPABASE_DSN` and
+  `SUPABASE_ACCESS_TOKEN` in `.env` and **Data sources** offers it in one
+  click; the hosted demo gives it to every visitor (see
+  [docs/hosting.md](docs/hosting.md)).
 
 ## The control plane
 

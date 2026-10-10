@@ -9,7 +9,8 @@ What a visitor gets, on their first visit (`POST /api/session`):
   * their own copy of the sample Postgres tables, in a schema of its own,
     so "Simulate new activity" fires *their* rules and nobody else's
   * the sample data sources connected (the copy, and the shared read-only
-    MySQL support desk) and the sample definitions loaded
+    MySQL support desk and Supabase project, when configured) and the sample
+    definitions loaded
 
 What keeps a public instance from being a way into anything:
 
@@ -27,6 +28,10 @@ Settings, all read from the environment:
     ROWFIRE_HOSTED_DEFINITIONS          the YAML every visitor starts with
     ROWFIRE_DEMO_DSN                    read-only login to the sample Postgres
     ROWFIRE_DEMO_MYSQL_DSN              optional read-only MySQL source
+    ROWFIRE_DEMO_SUPABASE_DSN           optional Supabase source, shared read-only:
+                                        supabase://<ref>, read with the server's
+                                        SUPABASE_ACCESS_TOKEN
+                                        (examples/saas/supabase.sql)
     ROWFIRE_DEMO_ACTIVITY_DSN           write login to the sample Postgres, used
                                         to copy the tables and to simulate
     ROWFIRE_WORKSPACE_IDLE_HOURS        default 24
@@ -74,6 +79,14 @@ STATEMENT_TIMEOUT_MS = 10_000
 # last_seen_at is written at most this often per workspace, so a page that
 # polls every few seconds does not turn into a write every few seconds.
 _TOUCH_EVERY = timedelta(minutes=5)
+
+
+# The optional sample sources every visitor shares, by the name a trigger's
+# `source:` uses and the setting that holds the connection.
+SHARED_SOURCES = (
+    ("support", "ROWFIRE_DEMO_MYSQL_DSN"),
+    ("supabase", "ROWFIRE_DEMO_SUPABASE_DSN"),
+)
 
 
 class HostedError(Exception):
@@ -365,20 +378,23 @@ def provision(session: Session, *, address: str, now: datetime | None = None) ->
             statement_timeout_ms=STATEMENT_TIMEOUT_MS,
             workspace_id=workspace.id,
         )
-        support = os.environ.get("ROWFIRE_DEMO_MYSQL_DSN", "")
-        if support:
-            store.save_connection(
-                session,
-                support,
-                name="support",
-                statement_timeout_ms=STATEMENT_TIMEOUT_MS,
-                workspace_id=workspace.id,
-            )
+        # Shared by every visitor and read-only by construction: MySQL through
+        # a SELECT-only login, Supabase through its read-only endpoint.
+        connected = {"primary"}
+        for name, env in SHARED_SOURCES:
+            dsn = os.environ.get(env, "").strip()
+            if dsn and readable(dsn):
+                store.save_connection(
+                    session,
+                    dsn,
+                    name=name,
+                    statement_timeout_ms=STATEMENT_TIMEOUT_MS,
+                    workspace_id=workspace.id,
+                )
+                connected.add(name)
         store.save_definitions(
             session,
-            _readable_only(
-                Path(definitions_path).read_text(), {"primary", *(["support"] if support else [])}
-            ),
+            _readable_only(Path(definitions_path).read_text(), connected),
             created_by="hosted",
             workspace_id=workspace.id,
         )
@@ -389,6 +405,19 @@ def provision(session: Session, *, address: str, now: datetime | None = None) ->
         raise
     _recent.mark(workspace.id)
     return workspace
+
+
+def readable(dsn: str) -> bool:
+    """Whether a shared source can be read here, so it is worth connecting.
+
+    A supabase:// source is read with the server's token: without one, every
+    visitor would get a source that fails on every poll.
+    """
+    if dsn.split("://", 1)[0].lower() != "supabase":
+        return True
+    from . import supabase
+
+    return bool(os.environ.get(supabase.ACCESS_TOKEN_ENV, "").strip())
 
 
 def _readable_only(yaml_text: str, sources: set[str]) -> str:

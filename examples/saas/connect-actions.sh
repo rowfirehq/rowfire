@@ -94,3 +94,8 @@ post bindings '{"rule_name":"escalate_unanswered_urgent",'"$CHAT"',
   "parameters":{"channel":"#support",
     "text":":rotating_light: Urgent ticket #{{ id }} has no reply yet: \"{{ subject }}\" from {{ requester_email }} via {{ channel }}"}}' \
   "escalate_unanswered_urgent -> $CHAT_TO #support"
+
+post bindings '{"rule_name":"nudge_upgrade",'"$CHAT"',
+  "parameters":{"channel":"#growth",
+    "text":":chart_with_upwards_trend: {{ name }} ({{ owner_email }}) is on the free plan and just passed 80% of its {{ monthly_quota }} API calls for the month. Time to talk about Pro."}}' \
+  "nudge_upgrade -> $CHAT_TO #growth"

@@ -79,6 +79,30 @@ It accepts connections only from the two services (`ipAllowList: []`).
 - *A spending notification* under **Billing**, so a burst of traffic
   cannot surprise you.
 
+**A Supabase source (optional).** Visitors can also get a third data
+source: the sample product's own usage data, read from a Supabase project
+through Supabase's read-only endpoint, with a sample trigger
+(`free_workspace_near_quota`) and rule (`nudge_upgrade`) on it. Every
+visitor shares it, read-only, as they share the MySQL support desk.
+
+1. Create a Supabase project and run
+   [`examples/saas/supabase.sql`](../examples/saas/supabase.sql) in its SQL
+   editor. It makes two tables with row level security on and no policies,
+   seeds sixty days of history, and schedules an hourly pg_cron job that
+   keeps adding usage and the occasional signup, so the trigger keeps firing.
+2. Create a personal access token under *Account → Access tokens*. It can do
+   anything its account can, so make it from a Supabase account that is a
+   member of nothing but the demo project's organization. Rowfire only ever
+   sends it to the read-only query endpoint, but a token on a public server
+   should open nothing else if it leaks.
+3. Set `ROWFIRE_DEMO_SUPABASE_DSN` to `supabase://<project ref>` and
+   `SUPABASE_ACCESS_TOKEN` to the token on both services, the web app and
+   the worker (Render asks for them on the first deploy). New visitors get the
+   source; existing workspaces keep what they had.
+
+Without both settings the demo has no Supabase source, and the Supabase
+trigger and rule are left out of each visitor's sample.
+
 **If a deploy fails,** the web service's **Events** tab shows which step.
 `rowfire cloud predeploy` names what it could not do. The likeliest is the
 database user lacking `CREATEROLE`, which the demo needs for the read-only

@@ -124,6 +124,14 @@ services:
       # the service names -- not the host's published ports.
       ROWFIRE_DEMO_DSN: postgresql://rowfire_ro:rowfire_ro@postgres:5432/rowfire_fixture
       ROWFIRE_DEMO_MYSQL_DSN: mysql://rowfire_ro:rowfire_ro@mysql:3306/rowfire_support
+      # Supabase, all optional and read from .env: a demo project
+      # (examples/saas/supabase.sql), a token to read it with, and an OAuth
+      # app for "Connect Supabase". See the README's Supabase section.
+      ROWFIRE_DEMO_SUPABASE_DSN: ${ROWFIRE_DEMO_SUPABASE_DSN:-}
+      SUPABASE_ACCESS_TOKEN: ${SUPABASE_ACCESS_TOKEN:-}
+      SUPABASE_OAUTH_CLIENT_ID: ${SUPABASE_OAUTH_CLIENT_ID:-}
+      SUPABASE_OAUTH_CLIENT_SECRET: ${SUPABASE_OAUTH_CLIENT_SECRET:-}
+      ROWFIRE_PUBLIC_URL: ${ROWFIRE_PUBLIC_URL:-}
       # Both are required: the control plane is the only store, and the
       # server refuses to start without one.
       ROWFIRE_PLATFORM_DSN: postgresql+psycopg://rowfire:rowfire@controlplane:5432/rowfire_platform
@@ -151,6 +159,10 @@ services:
       # Losing this makes every stored credential unrecoverable. Injected from
       # the host so it is never baked into an image layer.
       ROWFIRE_MASTER_KEY: ${ROWFIRE_MASTER_KEY:?set it from rowfire platform init-key}
+      # A Supabase source is read with these, and its OAuth token refreshed.
+      SUPABASE_ACCESS_TOKEN: ${SUPABASE_ACCESS_TOKEN:-}
+      SUPABASE_OAUTH_CLIENT_ID: ${SUPABASE_OAUTH_CLIENT_ID:-}
+      SUPABASE_OAUTH_CLIENT_SECRET: ${SUPABASE_OAUTH_CLIENT_SECRET:-}
     entrypoint: ["rowfire"]
     command: ["worker", "--interval", "5"]
     restart: unless-stopped
