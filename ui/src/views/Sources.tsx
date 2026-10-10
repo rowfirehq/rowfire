@@ -498,7 +498,8 @@ function AddSource({
               >
                 <span className="with-icon">
                   <BrandIcon name={demo.kind} size="sm" label="" />
-                  Use the demo {engineLabel(demo.kind)} database
+                  Use the demo {engineLabel(demo.kind)}{" "}
+                  {demo.kind === "supabase" ? "project" : "database"}
                 </span>
               </button>
             ))}
