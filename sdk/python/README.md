@@ -11,7 +11,7 @@ app**, so only the events a subscription asks for leave the process, with only
 the fields it names. Adding an event is a config change, not a deploy.
 
 This is a prototype of the app side only. Rowfire has no `/v1/events` or
-`/v1/config` endpoint yet; the tests, demo and benchmark run against
+`/v1/config` endpoint yet; the tests and the benchmark run against
 `rowfire_sdk.testing.FakeIngest`.
 
 ## Using it
