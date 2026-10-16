@@ -55,24 +55,25 @@ __all__ = [
 
 log = logging.getLogger("rowfire_sdk")
 
-_client: Client | None = None
+# Not `_client`: that name is the `rowfire_sdk._client` module.
+_active: Client | None = None
 _atexit_registered = False
 
 
 def init(endpoint: str, api_key: str, **options: Any) -> Client:
     """Start the SDK. Options are those of `Client`."""
-    global _client, _atexit_registered
-    if _client is not None:
-        _client.close(timeout=0.5)
-    _client = Client(endpoint, api_key, **options)
+    global _active, _atexit_registered
+    if _active is not None:
+        _active.close(timeout=0.5)
+    _active = Client(endpoint, api_key, **options)
     if not _atexit_registered:
         atexit.register(_shutdown)
         _atexit_registered = True
-    return _client
+    return _active
 
 
 def get_client() -> Client | None:
-    return _client
+    return _active
 
 
 def current_operation() -> Operation | None:
@@ -98,7 +99,7 @@ def operation(
     except BaseException:
         raise
     else:
-        client = _client
+        client = _active
         if client is not None:
             try:
                 client.operation_finished(op)
@@ -116,18 +117,18 @@ def set_actor(**actor: Any) -> None:
 
 
 def flush(timeout: float = 2.0) -> bool:
-    return _client.flush(timeout) if _client is not None else True
+    return _active.flush(timeout) if _active is not None else True
 
 
 def close(timeout: float = 2.0) -> None:
-    global _client
-    if _client is not None:
-        _client.close(timeout)
-        _client = None
+    global _active
+    if _active is not None:
+        _active.close(timeout)
+        _active = None
 
 
 def stats() -> dict[str, Any]:
-    return _client.stats() if _client is not None else {}
+    return _active.stats() if _active is not None else {}
 
 
 def _shutdown() -> None:

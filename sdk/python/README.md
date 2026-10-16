@@ -126,6 +126,15 @@ for CPU.
 - HTTP proxies, Django, Celery and other integrations, and an outbox option for
   events that must survive a crash between commit and send.
 
+## Walkthrough
+
+```bash
+PYTHONPATH=sdk/python/src uv run python sdk/python/examples/walkthrough.py
+```
+
+Follows refunds through the SDK: delivered, retried after a 503, rolled back,
+and ignored. It prints each component as it acts and the thread it runs on.
+
 ## Tests
 
 ```bash
