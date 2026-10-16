@@ -46,7 +46,9 @@ build-backend = "hatchling.build"
 packages = ["src/rowfire"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "sdk/python/tests"]
+# The in-app SDK is its own package (sdk/python); its tests run with these.
+pythonpath = ["sdk/python/src"]
 markers = [
     "db: requires the fixture Postgres (docker compose up -d postgres)",
 ]
