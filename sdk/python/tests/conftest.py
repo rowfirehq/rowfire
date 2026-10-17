@@ -6,7 +6,13 @@ import rowfire_sdk
 from rowfire_sdk.testing import FakeIngest
 
 # Fast enough that a test never waits on the clock for long.
-FAST = {"flush_interval": 0.02, "backoff_base": 0.02, "backoff_max": 0.1, "timeout": 2.0}
+FAST = {
+    "flush_interval": 0.02,
+    "flush_jitter": 0.0,
+    "backoff_base": 0.02,
+    "backoff_max": 0.1,
+    "timeout": 2.0,
+}
 
 
 @pytest.fixture

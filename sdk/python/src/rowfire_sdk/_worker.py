@@ -10,7 +10,8 @@ Patterns taken from sentry-python (`sentry_sdk/_batcher.py`, `worker.py`):
   thread rather than inheriting a dead one;
 - a thread-local guard drops a re-entrant `add()` made from inside the worker
   (a log handler that reports to us, say) instead of deadlocking on our lock;
-- the flush wait is jittered, so a fleet of processes does not flush in step;
+- the same timing: wake every 5 seconds plus a random 0 to 1 second, or as
+  soon as a batch fills, so a fleet of processes does not flush in step;
 - an exception in one cycle is logged and the loop carries on, since a dead
   thread would leave the buffer filling with nothing draining it.
 
@@ -83,7 +84,8 @@ class Worker:
         *,
         batch_size: int = 200,
         max_queue: int = 10_000,
-        flush_interval: float = 1.0,
+        flush_interval: float = 5.0,
+        flush_jitter: float = 1.0,
         backoff_base: float = 1.0,
         backoff_max: float = 60.0,
         on_tick: Callable[[bool], None] | None = None,
@@ -95,6 +97,7 @@ class Worker:
         self._batch_size = batch_size
         self._max_queue = max_queue
         self._flush_interval = flush_interval
+        self._flush_jitter = flush_jitter
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
         self._on_tick = on_tick
@@ -212,7 +215,7 @@ class Worker:
     def _loop(self) -> None:
         self._guard.active = True
         while self._running:
-            self._wake.wait(self._flush_interval * (1 + 0.2 * random.random()))
+            self._wake.wait(self._next_wait())
             self._wake.clear()
             with self._lock:
                 waiters, self._waiters = self._waiters, []
@@ -226,6 +229,19 @@ class Worker:
             waiters, self._waiters = self._waiters, []
         for waiter in waiters:
             waiter.set()
+
+    def _next_wait(self) -> float:
+        """Seconds to sleep, unless woken sooner by a full batch or a flush.
+
+        Sentry's timing: its batchers wait FLUSH_WAIT_TIME (5s) plus a random
+        0 to 1s, so a fleet of processes started together does not send in
+        step. A retry that falls due sooner than that wakes the thread for it.
+        """
+        wait = self._flush_interval + random.random() * self._flush_jitter
+        until_retry = self._retry_at - time.monotonic()
+        if 0 < until_retry < wait:
+            wait = until_retry
+        return wait
 
     def _run_safely(self, fn: Callable[[], None]) -> None:
         try:

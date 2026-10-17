@@ -68,7 +68,8 @@ class Client:
         spool_max_bytes: int = 64 * 1024 * 1024,
         batch_size: int = 200,
         max_queue: int = 10_000,
-        flush_interval: float = 1.0,
+        flush_interval: float = 5.0,
+        flush_jitter: float = 1.0,
         config_interval: float = 30.0,
         timeout: float = 5.0,
         compress: bool = True,
@@ -98,12 +99,21 @@ class Client:
         self._static = subscriptions is not None
         self.config_errors = 0
         self._transport = Transport(endpoint, api_key, timeout, compress, proxy)
+        self._spool: Any = MemorySpool(spool_max_bytes)
+        self._config_cache: str | None = None
         if spool_dir:
-            self._spool: Any = DiskSpool(spool_dir, spool_max_bytes)
-            self._config_cache: str | None = os.path.join(spool_dir, "config.json")
-        else:
-            self._spool = MemorySpool(spool_max_bytes)
-            self._config_cache = None
+            try:
+                self._spool = DiskSpool(spool_dir, spool_max_bytes)
+                self._config_cache = os.path.join(spool_dir, "config.json")
+            except OSError as exc:
+                # Read-only filesystem, missing permission, full disk: carry on
+                # with the memory spool rather than fail the app's startup.
+                log.warning(
+                    "rowfire-sdk: cannot use spool_dir %r (%s); keeping retries in memory",
+                    spool_dir,
+                    exc,
+                )
+        self.spool_kind = type(self._spool).__name__
         self._etag: str | None = None
         self._config_interval = config_interval
         self._next_config = 0.0
@@ -122,6 +132,7 @@ class Client:
             batch_size=batch_size,
             max_queue=max_queue,
             flush_interval=flush_interval,
+            flush_jitter=flush_jitter,
             backoff_base=backoff_base,
             backoff_max=backoff_max,
             on_tick=self._tick,
@@ -310,6 +321,7 @@ class Client:
             "sent": self.counters.sent,
             "spooled": self.counters.spooled,
             "waiting_in_spool": self._spool.pending(),
+            "spool": self.spool_kind,
             "lost": dict(self.counters.lost_total),
             "config_version": self.matcher.version,
             "config_errors": self.config_errors,

@@ -154,7 +154,12 @@ def test_subscriptions_come_from_rowfire_and_are_cached(tmp_path):
     config = {"version": "v1", "subscriptions": [CHECKOUT]}
     with FakeIngest(config=config) as ingest:
         client = rowfire.init(
-            ingest.url, "k", spool_dir=str(tmp_path), flush_interval=0.02, config_interval=0.05
+            ingest.url,
+            "k",
+            spool_dir=str(tmp_path),
+            flush_interval=0.02,
+            flush_jitter=0.0,
+            config_interval=0.05,
         )
         assert _eventually(lambda: client.matcher.version == "v1")
         checkout(1)
@@ -210,3 +215,26 @@ def test_bodies_are_gzipped_unless_compression_is_off(start, ingest):
     assert rowfire.flush()
     assert ingest.encodings == ["gzip", None]
     assert [e["data"]["params.n"] for e in ingest.events] == [1, 2]
+
+
+def test_an_unusable_spool_dir_falls_back_to_memory_instead_of_failing(tmp_path, start, ingest):
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)  # readable, not writable
+    try:
+        if os.access(locked, os.W_OK):
+            pytest.skip("running as a user that ignores permissions (root)")
+        client = start([CHECKOUT], spool_dir=str(locked / "spool"))
+        assert client.stats()["spool"] == "MemorySpool"
+        checkout(1)
+        assert rowfire.flush()
+        assert len(ingest.events) == 1
+    finally:
+        locked.chmod(0o700)
+
+
+def test_a_spool_dir_on_a_file_falls_back_to_memory(tmp_path, start, ingest):
+    not_a_dir = tmp_path / "file"
+    not_a_dir.write_text("x")
+    client = start([CHECKOUT], spool_dir=str(not_a_dir / "spool"))
+    assert client.stats()["spool"] == "MemorySpool"

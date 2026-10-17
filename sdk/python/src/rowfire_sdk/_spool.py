@@ -63,6 +63,12 @@ class DiskSpool:
         self._max_bytes = max_bytes
         self._seq = itertools.count()
         os.makedirs(directory, exist_ok=True)
+        # Prove the directory takes a file now, so a read-only filesystem or a
+        # missing permission shows up at startup rather than mid-outage.
+        probe = os.path.join(directory, f".probe-{os.getpid()}")
+        with open(probe, "wb") as f:
+            f.write(b"ok")
+        os.unlink(probe)
 
     def put(self, body: bytes, count: int) -> int:
         name = f"{time.time_ns():020d}-{next(self._seq):08d}-{os.getpid()}-{count}{self.SUFFIX}"

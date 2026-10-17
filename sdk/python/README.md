@@ -132,14 +132,18 @@ process does everything else. The design follows `sentry-python`
 (`sentry_sdk/_batcher.py`, `worker.py`):
 
 - **Copied from Sentry:** a lazy thread owned by a pid, `register_at_fork`
-  resets, a re-entry guard, a jittered flush interval, gzip, a kept-alive
+  resets, a re-entry guard, Sentry's timing (send every 5 seconds plus a random
+  0 to 1 second, or as soon as a batch fills; `flush_interval` and
+  `flush_jitter`), gzip, a kept-alive
   connection, respect for `Retry-After`, and loss counts that ride along with
   the next batch.
 - **Different from Sentry:**
   - A failed send is **retried** with backoff; Sentry drops it.
   - A batch waiting for a retry goes to a **spool**, in memory or on disk. Disk
     spool files carry the writer's pid, so workers sharing a directory each send
-    their own, and adopt a dead process's.
+    their own, and adopt a dead process's. `spool_dir` is checked at startup by
+    writing a file; if it cannot be used (read-only filesystem, permissions),
+    the SDK logs why and keeps retries in memory instead of failing the app.
   - Events are **held until the transaction commits** and dropped on rollback.
   - Nothing is sampled.
 - **Events are not lost silently.** Every event carries a random id, so Rowfire
