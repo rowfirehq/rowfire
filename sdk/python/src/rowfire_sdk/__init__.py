@@ -3,8 +3,10 @@
 Installed once, it tags each database write with the operation that caused it
 (a route, a job) and sends Rowfire only the writes and operations that a
 subscription asks for, with only the fields it names. Subscriptions are
-fetched from Rowfire at runtime, so a new event needs no deploy; the ceiling,
-set here in code, bounds what any subscription can ask for.
+fetched from Rowfire at runtime, so a new event needs no deploy. Alongside
+events it sends a catalog of the app's operations, tables and values, so a
+subscription can be built from lists. An optional ceiling, set in code,
+bounds what any subscription can ask for.
 
     import rowfire_sdk as rowfire
     from rowfire_sdk.integrations import sqlalchemy as rowfire_sqlalchemy
@@ -12,7 +14,6 @@ set here in code, bounds what any subscription can ask for.
     rowfire.init(
         endpoint="https://rowfire.internal",
         api_key=os.environ["ROWFIRE_API_KEY"],
-        ceiling=rowfire.Ceiling(deny_fields=["*email*", "*password*", "*token*"]),
         spool_dir="/var/lib/myapp/rowfire",
     )
     rowfire_sqlalchemy.instrument()
@@ -94,9 +95,11 @@ def operation(
     """
     op = name if isinstance(name, Operation) else Operation(name, actor=actor, params=params)
     token = current.set(op)
+    failed = False
     try:
         yield op
     except BaseException:
+        failed = True
         raise
     else:
         client = _active
@@ -107,6 +110,12 @@ def operation(
                 log.exception("rowfire-sdk: could not match the finished operation")
     finally:
         current.reset(token)
+        client = _active
+        if client is not None:
+            try:
+                client.observe_operation(op, failed)
+            except Exception:
+                log.exception("rowfire-sdk: could not record the operation")
 
 
 def set_actor(**actor: Any) -> None:

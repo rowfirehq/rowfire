@@ -159,12 +159,6 @@ SUBSCRIPTIONS = [
         "where": {"row.status": "refunded"},
         "fields": ["row.id", "row.account_id"],
     },
-    {
-        "id": "wants_the_email",
-        "operation": "job AutoRefundWorker",
-        "on": {"table": "charges", "kind": "update"},
-        "fields": ["row.customer_email"],
-    },
 ]
 
 
@@ -192,17 +186,15 @@ def main() -> None:
 
     ingest = FakeIngest().start()
 
-    step("0. Startup: init() compiles subscriptions against the ceiling in the app's code")
-    client = rowfire.init(
+    step("0. Startup: init() compiles the subscriptions; the ORM hook starts listening")
+    rowfire.init(
         ingest.url,
         "demo-key",
         subscriptions=SUBSCRIPTIONS,
-        ceiling=rowfire.Ceiling(deny_fields=["*email*"]),
         flush_interval=0.2,
         backoff_base=0.3,
     )
-    for sub_id, reason in client.stats()["rejected_subscriptions"]:
-        say("ceiling", f"rejected {sub_id!r}: {reason}")
+    say("client", f"{len(SUBSCRIPTIONS)} subscriptions compiled, no ceiling set")
     hook.instrument()
     say("orm hook", "listening on Session after_flush / after_commit / after_rollback")
 
@@ -237,6 +229,8 @@ def main() -> None:
             s.get(Charge, 3).amount = 30
             s.commit()
 
+    rowfire.flush()
+
     step("What Rowfire received")
     for batch in ingest.batches:
         for event in batch["events"]:
@@ -244,8 +238,38 @@ def main() -> None:
     raw = json.dumps(ingest.batches[0]["events"][0], indent=2)
     print("\n  one event as sent (gzipped JSON on the wire):")
     print("\n".join("    " + line for line in raw.splitlines()))
+
+    step("What the dashboard can offer: the catalog, sent alongside events")
+    show_catalog(ingest.catalog)
     rowfire.close(timeout=0.5)
     ingest.stop()
+
+
+def listed(entry: dict) -> str:
+    if entry.get("many_values"):
+        return "many values"
+    return ", ".join(f"{v['value']} ({v['seen']})" for v in entry.get("values", []))
+
+
+def show_catalog(catalog: dict) -> None:
+    print("  operations")
+    for name, op in catalog["operations"].items():
+        actor = "  ".join(f"actor.{k}: {listed(v)}" for k, v in op.get("actor", {}).items())
+        print(f"    {name:<34} called {op['seen']}  {actor}")
+        for write in op["writes"]:
+            changed = ", ".join(write["changed"]) or "-"
+            print(f"      {write['kind']} {write['table']} x{write['seen']}, changing {changed}")
+    print("  tables")
+    for name, table in catalog["tables"].items():
+        print(f"    {name}")
+        for column, info in table["columns"].items():
+            print(f"      {column:<15} {info['type']:<9} {listed(info)}")
+        for column, moves in table["transitions"].items():
+            if moves.get("many_values"):
+                text = "many values"
+            else:
+                text = ", ".join(f"{m['from']} -> {m['to']} ({m['seen']})" for m in moves["values"])
+            print(f"      {column} changed: {text}")
 
 
 if __name__ == "__main__":

@@ -10,7 +10,9 @@ Four measurements, kept apart because they answer different questions:
    the request's path, but in CPython it holds the GIL while it works, so this
    is the share of the app's CPU that delivery takes.
 3. ORM writes: an update and commit with and without the hook, warmed up and
-   interleaved so drift lands on every case alike.
+   interleaved so drift lands on every case alike. On a shared machine the
+   spread between runs (tens of µs) is larger than the hook's own cost, so
+   read these deltas as "within noise" unless they are large.
 4. A slow Rowfire: per-call latency while every batch takes a second to be
    answered, next to an instant one. If the network were on the request's
    path, the slow column would show it.
@@ -84,24 +86,27 @@ def micros(fn: Callable[[], None], n: int, between: Callable[[], None] = bare) -
 def request_thread(rows: list) -> None:
     # Unreachable and never woken: the background thread does not run, and the
     # buffer is emptied between runs so its size does not skew the timing.
-    client = rowfire.init(
-        "http://127.0.0.1:9",
-        "bench",
-        subscriptions=SUBSCRIPTIONS,
-        batch_size=10**9,
-        flush_interval=3600,
-    )
-
-    def empty_buffer() -> None:
-        client.worker._buffer.clear()
-
     n = 20_000
     rows.append(("empty function call (baseline)", micros(bare, n), ""))
-    rows.append(("operation nobody subscribes to", micros(unwatched, n, empty_buffer), ""))
-    rows.append(
-        ("operation that matches: event built + queued", micros(watched, n, empty_buffer), "")
-    )
-    rowfire.close(timeout=0)
+    for catalog in (False, True):
+        client = rowfire.init(
+            "http://127.0.0.1:9",
+            "bench",
+            subscriptions=SUBSCRIPTIONS,
+            batch_size=10**9,
+            flush_interval=3600,
+            catalog=catalog,
+        )
+
+        def empty_buffer(client=client) -> None:
+            client.worker._buffer.clear()
+
+        label = "catalog on" if catalog else "catalog off"
+        rows.append(
+            (f"operation nobody subscribes to, {label}", micros(unwatched, n, empty_buffer), "")
+        )
+        rows.append((f"operation that matches, {label}", micros(watched, n, empty_buffer), ""))
+        rowfire.close(timeout=0)
 
 
 def background_thread(rows: list) -> None:

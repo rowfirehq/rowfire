@@ -52,10 +52,14 @@ class Transport:
         self._conn: http.client.HTTPConnection | None = None
 
     def send_batch(self, body: bytes, timeout: float | None = None) -> Outcome:
+        return self.post("/v1/events", body, timeout)
+
+    def post(self, path: str, body: bytes, timeout: float | None = None) -> Outcome:
+        """POST a gzipped JSON body and sort the response into an outcome."""
         try:
             status, headers, _ = self._request(
                 "POST",
-                "/v1/events",
+                path,
                 body,
                 {"Content-Type": "application/json", "Content-Encoding": "gzip"},
                 timeout,

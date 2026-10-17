@@ -8,6 +8,9 @@ the middleware, so the name is resolved lazily, the first time something asks
 for it (an ORM write, or the end of the request). FastAPI puts the matched
 route in `scope["route"]`; plain Starlette only leaves the endpoint, so its
 route is looked up from that.
+
+On the first request it also lists every route the router knows to the
+catalog, so the dashboard can offer operations before anyone has called them.
 """
 
 from __future__ import annotations
@@ -26,11 +29,18 @@ Send = Callable[[dict[str, Any]], Awaitable[None]]
 class RowfireMiddleware:
     def __init__(self, app: Callable[[Scope, Receive, Send], Awaitable[None]]) -> None:
         self.app = app
+        self._declared = False
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or rowfire_sdk.get_client() is None:
+        client = rowfire_sdk.get_client()
+        if scope["type"] != "http" or client is None:
             await self.app(scope, receive, send)
             return
+        if not self._declared:
+            # The router knows every route, called or not: list them all once,
+            # so the catalog shows operations nobody has used yet.
+            self._declared = True
+            client.declare_operations(declared_routes(scope.get("app")))
 
         op = Operation(
             resolve=lambda: route_name(scope),
@@ -44,6 +54,16 @@ class RowfireMiddleware:
 
         with rowfire_sdk.operation(op):
             await self.app(scope, receive, send_wrapper)
+
+
+def declared_routes(app: Any) -> list[str]:
+    names = []
+    for route in getattr(app, "routes", ()):
+        path = getattr(route, "path", None)
+        for method in sorted(getattr(route, "methods", None) or ()):
+            if path and method != "HEAD":
+                names.append(f"{method} {path}")
+    return names
 
 
 def route_name(scope: Scope) -> str | None:

@@ -6,7 +6,8 @@
         rowfire.flush()
         assert ingest.events[0]["subscription"] == "goodwill_refund"
 
-`fail_next(503, retry_after=1)` scripts the next responses; `delay` slows every
+Catalog snapshots go to `catalog` (the latest one). `fail_next(503,
+retry_after=1)` scripts the next responses; `delay` slows every
 answer down, to show that a slow Rowfire never slows the app.
 """
 
@@ -25,10 +26,12 @@ from typing import Any
 class FakeIngest:
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.batches: list[dict[str, Any]] = []
+        # Latest catalog snapshot per SDK instance, as Rowfire would keep it.
+        self.catalogs: dict[str, dict[str, Any]] = {}
         self.requests = 0
         self.delay = 0.0
         self.config = config
-        self._scripted: deque[tuple[int, dict[str, str]]] = deque()
+        self._scripted: dict[str, deque[tuple[int, dict[str, str]]]] = {}
         self._lock = threading.Lock()
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._server.daemon_threads = True
@@ -52,6 +55,14 @@ class FakeIngest:
         return list(seen.values())
 
     @property
+    def catalog(self) -> dict[str, Any]:
+        """The most recent catalog snapshot (tests run one instance)."""
+        with self._lock:
+            if not self.catalogs:
+                return {}
+            return list(self.catalogs.values())[-1]
+
+    @property
     def lost(self) -> dict[str, int]:
         total: dict[str, int] = {}
         with self._lock:
@@ -60,11 +71,17 @@ class FakeIngest:
                     total[reason] = total.get(reason, 0) + n
         return total
 
-    def fail_next(self, status: int, times: int = 1, retry_after: float | None = None) -> None:
+    def fail_next(
+        self,
+        status: int,
+        times: int = 1,
+        retry_after: float | None = None,
+        path: str = "/v1/events",
+    ) -> None:
         headers = {"Retry-After": str(retry_after)} if retry_after is not None else {}
         with self._lock:
             for _ in range(times):
-                self._scripted.append((status, headers))
+                self._scripted.setdefault(path, deque()).append((status, headers))
 
     def wait_for(self, n: int, timeout: float = 5.0) -> bool:
         deadline = time.monotonic() + timeout
@@ -115,13 +132,19 @@ class FakeIngest:
                     time.sleep(ingest.delay)
                 with ingest._lock:
                     ingest.requests += 1
-                    scripted = ingest._scripted.popleft() if ingest._scripted else None
+                    queue = ingest._scripted.get(self.path)
+                    scripted = queue.popleft() if queue else None
                 if scripted is not None:
                     self._reply(scripted[0], extra=scripted[1])
                     return
                 payload = json.loads(gzip.decompress(raw))
                 with ingest._lock:
-                    ingest.batches.append(payload)
+                    if self.path == "/v1/catalog":
+                        instance = payload["instance"]["id"]
+                        ingest.catalogs.pop(instance, None)
+                        ingest.catalogs[instance] = payload
+                    else:
+                        ingest.batches.append(payload)
                 self._reply(202)
 
             def _reply(

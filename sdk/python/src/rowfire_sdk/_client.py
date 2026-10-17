@@ -8,6 +8,7 @@ operation?"), and is usually answered by one dict lookup. `match_change()` and
 
 from __future__ import annotations
 
+import gzip
 import http.client
 import json
 import logging
@@ -16,10 +17,11 @@ import time
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any, Callable
 
+from rowfire_sdk._catalog import Catalog
 from rowfire_sdk._context import NO_OPERATION, Operation
 from rowfire_sdk._matching import Ceiling, Facts, Matcher, Subscription, evaluate
 from rowfire_sdk._spool import DiskSpool, MemorySpool
-from rowfire_sdk._transport import Transport
+from rowfire_sdk._transport import OK, Transport
 from rowfire_sdk._worker import Counters, Worker
 
 log = logging.getLogger("rowfire_sdk")
@@ -29,11 +31,12 @@ class Change:
     """One row written inside an operation, read lazily.
 
     `row` and `old` look a column up; `changed` lists the columns this write
-    set. All three are only called once some subscription listens to the
-    table, so an unwatched write costs nothing beyond the table lookup.
+    set. They are only called when a subscription listens to the table or the
+    catalog samples the write. `columns` lists the table's columns and
+    `describe` returns their declared types, for the catalog.
     """
 
-    __slots__ = ("table", "kind", "row", "old", "changed")
+    __slots__ = ("table", "kind", "row", "old", "changed", "columns", "describe")
 
     def __init__(
         self,
@@ -42,12 +45,16 @@ class Change:
         row: Callable[[str], Any],
         old: Callable[[str], Any],
         changed: Callable[[], Collection[str]],
+        columns: Collection[str] = (),
+        describe: Callable[[], dict[str, dict[str, Any]]] = dict,
     ) -> None:
         self.table = table
         self.kind = kind
         self.row = row
         self.old = old
         self.changed = changed
+        self.columns = columns
+        self.describe = describe
 
 
 class Client:
@@ -67,9 +74,27 @@ class Client:
         timeout: float = 5.0,
         backoff_base: float = 1.0,
         backoff_max: float = 60.0,
+        catalog: bool = True,
+        catalog_interval: float = 60.0,
+        catalog_samples_per_minute: int = 100,
+        catalog_max_values: int = 20,
     ) -> None:
         self.ceiling = ceiling or Ceiling()
         self.counters = Counters()
+        self.catalog = (
+            Catalog(
+                self.ceiling,
+                samples_per_minute=catalog_samples_per_minute,
+                max_values=catalog_max_values,
+            )
+            if catalog
+            else None
+        )
+        self._catalog_interval = catalog_interval
+        self._next_catalog = time.monotonic() + catalog_interval
+        self._catalog_now = False
+        self.catalog_errors = 0
+        self._static = subscriptions is not None
         self.config_errors = 0
         self._transport = Transport(endpoint, api_key, timeout)
         if spool_dir:
@@ -98,7 +123,8 @@ class Client:
             flush_interval=flush_interval,
             backoff_base=backoff_base,
             backoff_max=backoff_max,
-            on_tick=None if static else self._poll_config,
+            on_tick=self._tick,
+            on_fork=self.catalog.after_fork if self.catalog else None,
         )
         # Otherwise the thread starts with the first event, as Sentry's does. It
         # is needed sooner to poll for config, or to send what an earlier
@@ -116,6 +142,28 @@ class Client:
             log.warning("rowfire-sdk: subscription %s rejected: %s", sub_id, reason)
         # One assignment, so the request thread sees the old set or the new one.
         self.matcher = matcher
+
+    def _tick(self, final: bool = False) -> None:
+        """Background thread, once per cycle: config in, catalog out."""
+        if not self._static and not final:
+            self._poll_config()
+        self._send_catalog(force=final)
+
+    def _send_catalog(self, force: bool = False) -> None:
+        catalog = self.catalog
+        if catalog is None or not catalog.dirty:
+            return
+        now = time.monotonic()
+        if not (force or self._catalog_now or now >= self._next_catalog):
+            return
+        self._catalog_now = False
+        self._next_catalog = now + self._catalog_interval
+        body = gzip.compress(json.dumps(catalog.snapshot(), default=str).encode())
+        outcome = self._transport.post("/v1/catalog", body)
+        if outcome.kind != OK:
+            # Counts are cumulative, so the next snapshot carries this one's.
+            catalog.dirty = True
+            self.catalog_errors += 1
 
     def _poll_config(self) -> None:
         now = time.monotonic()
@@ -191,6 +239,28 @@ class Client:
                 events.append(self._event(sub, name, data))
         return events
 
+    def observe_operation(self, op: Operation, failed: bool) -> None:
+        if self.catalog is not None:
+            self.worker.ensure_thread()
+            self.catalog.observe_operation(op.name, op.status, failed, op.params, op.actor)
+
+    def read_write(self, op: Operation | None, change: Change) -> tuple[Any, ...] | None:
+        """At flush: what the catalog needs from this write, to record on commit."""
+        if self.catalog is None:
+            return None
+        return self.catalog.read_write(op.name if op else NO_OPERATION, change)
+
+    def record_writes(self, records: list[tuple[Any, ...]]) -> None:
+        """At commit: add the writes read at flush to the catalog."""
+        if self.catalog is not None and records:
+            self.worker.ensure_thread()
+            self.catalog.record_writes(records)
+
+    def declare_operations(self, names: list[str]) -> None:
+        if self.catalog is not None:
+            self.worker.ensure_thread()
+            self.catalog.declare_operations(names)
+
     def operation_finished(self, op: Operation) -> None:
         if op.status is not None and op.status >= 400:
             return
@@ -226,6 +296,8 @@ class Client:
     # -- lifecycle --------------------------------------------------------------
 
     def flush(self, timeout: float = 2.0) -> bool:
+        """Send queued events now, and the catalog if it changed."""
+        self._catalog_now = True
         return self.worker.flush(timeout)
 
     def close(self, timeout: float = 2.0) -> None:
@@ -240,5 +312,6 @@ class Client:
             "lost": dict(self.counters.lost_total),
             "config_version": self.matcher.version,
             "config_errors": self.config_errors,
+            "catalog_errors": self.catalog_errors,
             "rejected_subscriptions": list(self.matcher.rejected),
         }

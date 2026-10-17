@@ -87,7 +87,8 @@ class Worker:
         flush_interval: float = 1.0,
         backoff_base: float = 1.0,
         backoff_max: float = 60.0,
-        on_tick: Callable[[], None] | None = None,
+        on_tick: Callable[[bool], None] | None = None,
+        on_fork: Callable[[], None] | None = None,
     ) -> None:
         self._transport = transport
         self._spool = spool
@@ -98,6 +99,7 @@ class Worker:
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
         self._on_tick = on_tick
+        self._on_fork = on_fork
         self._reset_state()
         if hasattr(os, "register_at_fork"):
             weak = weakref.WeakMethod(self._after_fork)
@@ -130,6 +132,8 @@ class Worker:
         self._counters.reset_after_fork()
         self._spool.reset()
         self._transport.abandon()
+        if self._on_fork is not None:
+            self._on_fork()
 
     # -- request thread -------------------------------------------------------
 
@@ -218,6 +222,7 @@ class Worker:
             for waiter in waiters:
                 waiter.set()
         self._run_safely(lambda: self._cycle(self._final_deadline))
+        self._run_safely(lambda: self._tick(final=True))
         with self._lock:
             waiters, self._waiters = self._waiters, []
         for waiter in waiters:
@@ -229,9 +234,9 @@ class Worker:
         except Exception:
             log.exception("rowfire-sdk: background cycle failed")
 
-    def _tick(self) -> None:
+    def _tick(self, final: bool = False) -> None:
         if self._on_tick is not None:
-            self._on_tick()
+            self._on_tick(final)
 
     def _cycle(self, deadline: float | None = None) -> None:
         with self._lock:

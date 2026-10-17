@@ -10,8 +10,12 @@ Subscriptions are fetched from Rowfire at runtime and matched **inside the
 app**, so only the events a subscription asks for leave the process, with only
 the fields it names. Adding an event is a config change, not a deploy.
 
-This is a prototype of the app side only. Rowfire has no `/v1/events` or
-`/v1/config` endpoint yet; the tests and the benchmark run against
+So that someone can write a subscription without reading the code, the SDK
+also sends a **catalog**: the operations the app has, the tables each one
+writes, the columns that change and the values they take.
+
+This is a prototype of the app side only. Rowfire has no `/v1/events`,
+`/v1/config` or `/v1/catalog` endpoint yet; the tests and the benchmark run against
 `rowfire_sdk.testing.FakeIngest`.
 
 ## Using it
@@ -24,11 +28,6 @@ from rowfire_sdk.integrations.asgi import RowfireMiddleware
 rowfire.init(
     endpoint="https://rowfire.internal",
     api_key=os.environ["ROWFIRE_API_KEY"],
-    # The app's side of the contract: no subscription can reach past it.
-    ceiling=rowfire.Ceiling(
-        allow_operations=["POST /admin/*", "POST /checkout", "job *"],
-        deny_fields=["*email*", "*password*", "*token*", "ssn"],
-    ),
     spool_dir="/var/lib/myapp/rowfire",  # optional: survive restarts
 )
 rowfire_sqlalchemy.instrument()  # every Session
@@ -64,11 +63,67 @@ The middleware names a request by its route *template*
 - Field paths: `row.<column>` (after the write), `old.<column>` (before it),
   `actor.<attr>`, `params.<name>`, `operation`, `response.status`.
 
-The **ceiling** is set in code, never by config. An operation outside
-`allow_operations` matches nothing. A subscription that asks for a denied
-field, or tests one in `where`, is rejected and listed in
-`stats()["rejected_subscriptions"]`. Testing counts because an event that fires
-only for `@bigcorp.com` addresses reveals something about the address.
+An optional **ceiling**, set in code and never by config, bounds what any
+subscription can reach: `rowfire.Ceiling(allow_operations=[...],
+deny_fields=["*email*"])`. An operation outside `allow_operations` matches
+nothing. A subscription that asks for a denied field, or tests one in `where`,
+is rejected and listed in `stats()["rejected_subscriptions"]`. Testing counts
+because an event that fires only for `@bigcorp.com` addresses reveals
+something about the address. None is set by default; deciding the defaults is
+left for later.
+
+## Catalog
+
+What the dashboard needs so that people pick instead of type. Sent to
+`POST /v1/catalog` every `catalog_interval` seconds (60 by default), on the same
+background thread as events:
+
+```json
+{
+  "operations": {
+    "POST /admin/charges/{id}/refund": {
+      "declared": true, "seen": 41, "errors": 0, "statuses": {"200": 41},
+      "params": {"id": {"many_values": true}},
+      "actor": {"role": {"values": [{"value": "support", "seen": 41}]}},
+      "writes": [{"table": "charges", "kind": "update", "seen": 38, "sampled": 38,
+                  "changed": {"status": 38, "refunded_at": 38}}]
+    }
+  },
+  "tables": {
+    "charges": {
+      "columns": {
+        "status": {"type": "string", "nullable": false, "primary_key": false,
+                   "values": [{"value": "paid", "seen": 12}, {"value": "refunded", "seen": 38}]},
+        "plan":   {"type": "enum", "declared_values": ["free", "team", "enterprise"], "...": "..."}
+      },
+      "transitions": {"status": {"values": [{"from": "paid", "to": "refunded", "seen": 38}]}}
+    }
+  }
+}
+```
+
+Where each part comes from:
+
+- **Declared**, from code: every route the router knows, listed on the first
+  request even if nobody has called it yet; each table's columns, types,
+  foreign keys and enum values, from the ORM's models.
+- **Counted**: every operation (calls, errors, statuses) and every committed
+  write, by operation, table and kind. A write that rolls back is not counted.
+- **Observed**, from data: on sampled writes, the values each column takes and,
+  for updates, what it changed from and to; and the values of actor attributes
+  and path parameters.
+
+Observed values are real data, and nothing restricts them yet. Two settings
+keep the catalog useful:
+
+- `catalog_max_values` (20): a column with more distinct values than this
+  (ids, emails, amounts) is marked `many_values` and its list is dropped.
+- `catalog_samples_per_minute` (100): how many writes per operation, table and
+  kind are read for values each minute. Every write is still counted.
+
+Counts are cumulative per process, tagged with an instance id, so Rowfire keeps
+the latest snapshot per instance and adds them up; a failed send is carried by
+the next one. `catalog=False` turns it off.
 
 ## Delivery
 
@@ -98,27 +153,36 @@ process does everything else. The design follows `sentry-python`
 one run on a shared cloud container (Python 3.13), so read these as orders of
 magnitude:
 
-| | µs |
-| --- | ---: |
-| operation nobody subscribes to | 2.0 |
-| operation that matches: event built + queued | 7.5 |
-| encode + gzip, per event, background thread | 4.4 |
-| ORM update + commit (SQLite in memory), not instrumented | 552 |
-| same, instrumented, operation nobody watches | +1.7 (within noise) |
-| same, instrumented, matched | +48 |
+| | catalog off | catalog on |
+| --- | ---: | ---: |
+| operation nobody subscribes to | 2.3 µs | 4.0 µs |
+| operation that matches: event built + queued | 8.5 µs | 15 µs |
+| encode + gzip, per event, background thread | 4.5 µs | |
+
+The catalog's share is recording each operation's actor and parameters.
+
+For ORM writes (an update and commit on in-memory SQLite, about 700 µs), the
+hook's cost is smaller than this machine's run-to-run spread. The benchmark
+shows +35 to +50 µs for a write nobody subscribes to and +75 to +100 µs for a
+matched one, while an interleaved comparison of catalog on and off came out
+within noise. A profile puts the SDK's own work at roughly 10 to 20 µs per
+write. Against a real database, where a commit is a network round trip, it is
+smaller still in relative terms.
 
 With Rowfire taking a full second to answer each batch, per-call latency for
-matched operations was p50 36 µs and p99 127 µs. Against an instant Rowfire it
-was p50 31 µs and p99 122 µs. So the network is off the request's path. The
-remaining gap to the 7.5 µs above is the benchmark loop pacing itself (the
-control case in the same loop measures that). The background thread's own work
+matched operations matched the latency against an instant Rowfire (p50 within
+a few µs). So the network is off the request's path. The gap between those
+p50s and the table above is the benchmark loop pacing itself (the control case
+in the same loop measures that). The background thread's own work
 holds the GIL, so at very high event rates delivery does compete with the app
 for CPU.
 
 ## Not done yet
 
-- Rowfire's side: the ingest and config endpoints, dedup by event id, and an
-  event store that triggers can query.
+- Rowfire's side: the ingest, config and catalog endpoints, dedup by event id,
+  an event store that triggers can query, and the picker UI over the catalog.
+- Limits on what the catalog observes (opt-in per column, for instance), and a
+  default ceiling.
 - Core SQL (`session.execute(update(...))`) bypasses the ORM's unit of work and
   is not seen.
 - An event matched inside a SAVEPOINT that rolls back while the outer
@@ -133,7 +197,8 @@ PYTHONPATH=sdk/python/src uv run python sdk/python/examples/walkthrough.py
 ```
 
 Follows refunds through the SDK: delivered, retried after a 503, rolled back,
-and ignored. It prints each component as it acts and the thread it runs on.
+and ignored. It prints each component as it acts and the thread it runs on,
+then the catalog the dashboard would receive.
 
 ## Tests
 
