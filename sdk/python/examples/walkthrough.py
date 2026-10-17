@@ -10,6 +10,7 @@ wraps the SDK's functions from the outside; nothing in the SDK prints.
 from __future__ import annotations
 
 import functools
+import gzip
 import json
 import logging
 import threading
@@ -81,7 +82,8 @@ trace(
 def encoded(body, events, lost):
     if events:
         size = len(json.dumps({"events": events}, default=str))
-        return "encode", f"batch of {len(events)}: {size} bytes of JSON, {len(body)} gzipped"
+        zipped = len(gzip.compress(body))
+        return "encode", f"batch of {len(events)}: {size} bytes of JSON, {zipped} gzipped"
     return None
 
 

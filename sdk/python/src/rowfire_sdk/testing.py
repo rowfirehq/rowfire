@@ -29,6 +29,7 @@ class FakeIngest:
         # Latest catalog snapshot per SDK instance, as Rowfire would keep it.
         self.catalogs: dict[str, dict[str, Any]] = {}
         self.requests = 0
+        self.encodings: list[str | None] = []  # Content-Encoding of each POST
         self.delay = 0.0
         self.config = config
         self._scripted: dict[str, deque[tuple[int, dict[str, str]]]] = {}
@@ -137,7 +138,11 @@ class FakeIngest:
                 if scripted is not None:
                     self._reply(scripted[0], extra=scripted[1])
                     return
-                payload = json.loads(gzip.decompress(raw))
+                with ingest._lock:
+                    ingest.encodings.append(self.headers.get("Content-Encoding"))
+                if self.headers.get("Content-Encoding") == "gzip":
+                    raw = gzip.decompress(raw)
+                payload = json.loads(raw)
                 with ingest._lock:
                     if self.path == "/v1/catalog":
                         instance = payload["instance"]["id"]

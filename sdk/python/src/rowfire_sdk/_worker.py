@@ -21,7 +21,6 @@ spool, which can be on disk.
 
 from __future__ import annotations
 
-import gzip
 import json
 import logging
 import os
@@ -325,8 +324,9 @@ def encode(events: list[dict[str, Any]], lost: dict[str, int]) -> bytes:
         "events": [_formatted(e) for e in events],
         "lost": lost,
     }
-    raw = json.dumps(payload, separators=(",", ":"), default=str).encode()
-    return gzip.compress(raw, compresslevel=6)
+    # Compressed by the transport, so a spooled batch is sent the way the
+    # current settings say, whichever settings wrote it.
+    return json.dumps(payload, separators=(",", ":"), default=str).encode()
 
 
 def _formatted(event: dict[str, Any]) -> dict[str, Any]:

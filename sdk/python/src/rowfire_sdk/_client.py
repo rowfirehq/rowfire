@@ -8,7 +8,6 @@ operation?"), and is usually answered by one dict lookup. `match_change()` and
 
 from __future__ import annotations
 
-import gzip
 import http.client
 import json
 import logging
@@ -72,6 +71,8 @@ class Client:
         flush_interval: float = 1.0,
         config_interval: float = 30.0,
         timeout: float = 5.0,
+        compress: bool = True,
+        proxy: str | bool = True,
         backoff_base: float = 1.0,
         backoff_max: float = 60.0,
         catalog: bool = True,
@@ -96,7 +97,7 @@ class Client:
         self.catalog_errors = 0
         self._static = subscriptions is not None
         self.config_errors = 0
-        self._transport = Transport(endpoint, api_key, timeout)
+        self._transport = Transport(endpoint, api_key, timeout, compress, proxy)
         if spool_dir:
             self._spool: Any = DiskSpool(spool_dir, spool_max_bytes)
             self._config_cache: str | None = os.path.join(spool_dir, "config.json")
@@ -158,7 +159,7 @@ class Client:
             return
         self._catalog_now = False
         self._next_catalog = now + self._catalog_interval
-        body = gzip.compress(json.dumps(catalog.snapshot(), default=str).encode())
+        body = json.dumps(catalog.snapshot(), default=str).encode()
         outcome = self._transport.post("/v1/catalog", body)
         if outcome.kind != OK:
             # Counts are cumulative, so the next snapshot carries this one's.

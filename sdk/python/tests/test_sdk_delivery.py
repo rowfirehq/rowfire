@@ -199,3 +199,14 @@ def _dead_pid() -> int:
         except PermissionError:
             pass
         pid += 1
+
+
+def test_bodies_are_gzipped_unless_compression_is_off(start, ingest):
+    start([CHECKOUT], catalog=False)
+    checkout(1)
+    assert rowfire.flush()
+    start([CHECKOUT], catalog=False, compress=False)
+    checkout(2)
+    assert rowfire.flush()
+    assert ingest.encodings == ["gzip", None]
+    assert [e["data"]["params.n"] for e in ingest.events] == [1, 2]

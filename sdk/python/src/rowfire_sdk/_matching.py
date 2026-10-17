@@ -34,7 +34,6 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Callable
-from uuid import UUID
 
 NAMESPACES = ("row", "old", "actor", "params")
 SCALARS = ("operation", "response.status")
@@ -191,7 +190,12 @@ def plain(value: Any) -> Any:
         return value.isoformat()
     if isinstance(value, Enum):
         return plain(value.value)
-    if isinstance(value, (Decimal, UUID)):
+    if isinstance(value, Decimal):
+        # A number, like the float the app may have set before the database
+        # handed back a Decimal, unless a float would lose digits (then the
+        # exact string). 12.10 becomes 12.1; 0.1000000000000000055 stays text.
+        if value.is_finite() and Decimal(repr(float(value))) == value:
+            return int(value) if value == value.to_integral_value() else float(value)
         return str(value)
     return str(value)
 

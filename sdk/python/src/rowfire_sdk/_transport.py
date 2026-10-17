@@ -11,14 +11,23 @@ them differently:
 
 Sentry drops on "retry" as well. For telemetry that is right; for events that
 open tickets it is not.
+
+A proxy is taken from the environment by default, as curl and requests do:
+`HTTPS_PROXY` (or `HTTP_PROXY` for an http endpoint), skipped for hosts in
+`NO_PROXY`. The connection is a CONNECT tunnel through it, so TLS still runs
+end to end with Rowfire, verified against the default trust store (which
+honours `SSL_CERT_FILE`).
 """
 
 from __future__ import annotations
 
+import base64
+import gzip
 import http.client
 import json
 import ssl
 import time
+import urllib.request
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -39,7 +48,14 @@ class Outcome:
 
 
 class Transport:
-    def __init__(self, endpoint: str, api_key: str, timeout: float = 5.0) -> None:
+    def __init__(
+        self,
+        endpoint: str,
+        api_key: str,
+        timeout: float = 5.0,
+        compress: bool = True,
+        proxy: str | bool = True,
+    ) -> None:
         parts = urlsplit(endpoint)
         if parts.scheme not in ("http", "https") or not parts.hostname:
             raise ValueError(f"endpoint must be an http(s) URL, got {endpoint!r}")
@@ -49,21 +65,24 @@ class Transport:
         self._base = parts.path.rstrip("/")
         self._api_key = api_key
         self._timeout = timeout
+        # Off only to read the traffic in a request inspector; the bodies are
+        # the same JSON either way.
+        self.compress = compress
+        self.proxy = resolve_proxy(proxy, parts.scheme, self._host)
         self._conn: http.client.HTTPConnection | None = None
 
     def send_batch(self, body: bytes, timeout: float | None = None) -> Outcome:
         return self.post("/v1/events", body, timeout)
 
     def post(self, path: str, body: bytes, timeout: float | None = None) -> Outcome:
-        """POST a gzipped JSON body and sort the response into an outcome."""
+        """POST a JSON body, gzipped unless `compress` is off, and sort the
+        response into an outcome."""
+        headers = {"Content-Type": "application/json"}
+        if self.compress:
+            body = gzip.compress(body, compresslevel=6)
+            headers["Content-Encoding"] = "gzip"
         try:
-            status, headers, _ = self._request(
-                "POST",
-                path,
-                body,
-                {"Content-Type": "application/json", "Content-Encoding": "gzip"},
-                timeout,
-            )
+            status, headers, _ = self._request("POST", path, body, headers, timeout)
         except (OSError, http.client.HTTPException) as exc:
             return Outcome(RETRY, f"network: {type(exc).__name__}")
         if 200 <= status < 300:
@@ -121,18 +140,50 @@ class Transport:
 
     def _connection(self) -> http.client.HTTPConnection:
         if self._conn is None:
+            # Through a proxy, connect to it and tunnel to Rowfire; otherwise
+            # connect to Rowfire directly.
+            host, port = (self.proxy[0], self.proxy[1]) if self.proxy else (self._host, self._port)
             if self._https:
-                self._conn = http.client.HTTPSConnection(
-                    self._host,
-                    self._port,
-                    timeout=self._timeout,
-                    context=ssl.create_default_context(),
+                conn: http.client.HTTPConnection = http.client.HTTPSConnection(
+                    host, port, timeout=self._timeout, context=ssl.create_default_context()
                 )
             else:
-                self._conn = http.client.HTTPConnection(
-                    self._host, self._port, timeout=self._timeout
-                )
+                conn = http.client.HTTPConnection(host, port, timeout=self._timeout)
+            if self.proxy:
+                default_port = 443 if self._https else 80
+                conn.set_tunnel(self._host, self._port or default_port, headers=self.proxy[2])
+            self._conn = conn
         return self._conn
+
+
+def resolve_proxy(
+    setting: str | bool, scheme: str, host: str
+) -> tuple[str, int, dict[str, str]] | None:
+    """(host, port, CONNECT headers) of the proxy to use, or None to go direct.
+
+    `setting` is True to read the environment, False to never use one, or a
+    proxy URL such as "http://user:pass@proxy:3128".
+    """
+    if setting is False:
+        return None
+    if setting is True:
+        if urllib.request.proxy_bypass(host):
+            return None
+        url = urllib.request.getproxies().get(scheme)
+        if not url:
+            return None
+    else:
+        url = setting
+    if "://" not in url:
+        url = f"http://{url}"
+    parts = urlsplit(url)
+    if not parts.hostname:
+        return None
+    headers = {}
+    if parts.username:
+        credentials = f"{parts.username}:{parts.password or ''}".encode()
+        headers["Proxy-Authorization"] = "Basic " + base64.b64encode(credentials).decode()
+    return parts.hostname, parts.port or 8080, headers
 
 
 def _retry_after(value: str | None) -> float | None:

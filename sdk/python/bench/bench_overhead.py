@@ -20,6 +20,7 @@ Four measurements, kept apart because they answer different questions:
 
 from __future__ import annotations
 
+import gzip
 import statistics
 import time
 from collections.abc import Callable
@@ -120,7 +121,7 @@ def background_thread(rows: list) -> None:
             "data": {"params.plan": "team", "actor.id": "u1"},
         }
     ] * 200
-    per_batch = micros(lambda: encode(events, {}), 200)
+    per_batch = micros(lambda: gzip.compress(encode(events, {}), compresslevel=6), 200)
     rows.append(("encode + gzip, per event (background thread)", per_batch / 200, ""))
 
 

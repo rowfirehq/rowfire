@@ -82,7 +82,7 @@ def test_a_support_refund_is_a_goodwill_refund(db, start, ingest):
     assert event["operation"] == SUPPORT_REFUND
     assert event["data"] == {
         "row.id": 1,
-        "row.amount": "25.00",
+        "row.amount": 25,
         "old.status": "paid",
         "actor.id": "agent-7",
         "params.id": "1",

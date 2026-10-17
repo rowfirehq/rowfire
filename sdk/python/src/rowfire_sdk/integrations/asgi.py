@@ -59,6 +59,10 @@ class RowfireMiddleware:
 def declared_routes(app: Any) -> list[str]:
     names = []
     for route in getattr(app, "routes", ()):
+        # FastAPI's own pages (/docs, /redoc, /openapi.json) opt out of the
+        # schema; they are not the app's operations.
+        if getattr(route, "include_in_schema", True) is False:
+            continue
         path = getattr(route, "path", None)
         for method in sorted(getattr(route, "methods", None) or ()):
             if path and method != "HEAD":

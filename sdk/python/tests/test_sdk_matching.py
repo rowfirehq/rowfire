@@ -73,7 +73,7 @@ def test_evaluate_checks_conditions_and_copies_only_the_named_fields():
     sub = matcher.resolve(REFUND["operation"]).tables["charges"][0]
     row = {"id": 7, "amount": Decimal("12.50"), "status": "refunded", "secret": "x"}.get
     facts = Facts(REFUND["operation"], {"id": "u1", "role": "support"}, {}, row=row)
-    assert evaluate(sub, facts) == {"row.id": 7, "row.amount": "12.50", "actor.id": "u1"}
+    assert evaluate(sub, facts) == {"row.id": 7, "row.amount": 12.5, "actor.id": "u1"}
 
     as_admin = Facts(REFUND["operation"], {"id": "u1", "role": "admin"}, {}, row=row)
     assert evaluate(sub, as_admin) is None
@@ -93,5 +93,12 @@ def test_plain_makes_values_json_ready():
     when = datetime(2026, 10, 16, tzinfo=timezone.utc)
     assert plain(when) == "2026-10-16T00:00:00+00:00"
     assert plain(Plan.TEAM) == "team"
-    assert plain(Decimal("1.10")) == "1.10"
+    # Decimals become numbers, so the database's 49.00 and the app's 49.0 match,
+    # unless a float would lose digits.
+    assert plain(Decimal("1.10")) == 1.1
+    assert plain(Decimal("49.00")) == 49
+    assert plain(Decimal("0.1000000000000000055511151231257827")) == (
+        "0.1000000000000000055511151231257827"
+    )
+    assert plain(Decimal("NaN")) == "NaN"
     assert plain(object()).startswith("<object")

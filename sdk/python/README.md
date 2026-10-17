@@ -187,7 +187,7 @@ for CPU.
   is not seen.
 - An event matched inside a SAVEPOINT that rolls back while the outer
   transaction commits is still sent.
-- HTTP proxies, Django, Celery and other integrations, and an outbox option for
+- Django, Celery and other integrations, and an outbox option for
   events that must survive a crash between commit and send.
 
 ## Walkthrough
@@ -199,6 +199,26 @@ PYTHONPATH=sdk/python/src uv run python sdk/python/examples/walkthrough.py
 Follows refunds through the SDK: delivered, retried after a 503, rolled back,
 and ignored. It prints each component as it acts and the thread it runs on,
 then the catalog the dashboard would receive.
+
+## Seeing the traffic
+
+```bash
+PYTHONPATH=sdk/python/src uv run python sdk/python/examples/send_to_endpoint.py URL
+```
+
+Runs a small FastAPI app with made-up data and sends its real traffic to `URL`:
+event batches to `URL/v1/events` and the catalog to `URL/v1/catalog`. Point it
+at a request inspector (Pipedream, webhook.site) to read every request. Bodies
+go as plain JSON there; `--gzip` compresses them as the SDK does by default,
+and `--show` prints each one locally too.
+
+Two client options exist for this and for real networks:
+
+- `compress=False` sends plain JSON instead of gzip, for request inspectors.
+- `proxy` (default: from the environment) is read like curl and requests do:
+  `HTTPS_PROXY`, skipped for hosts in `NO_PROXY`, with credentials in the URL
+  sent as `Proxy-Authorization`. The SDK tunnels with CONNECT, so TLS runs end
+  to end with Rowfire. Pass a URL to choose one, or `False` to go direct.
 
 ## Tests
 

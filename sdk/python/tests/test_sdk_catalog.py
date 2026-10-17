@@ -165,6 +165,7 @@ def test_routes_are_listed_before_anyone_calls_them(start, ingest):
     with TestClient(app) as http:
         http.post("/accounts/42/upgrade")
     ops = catalog(ingest)["operations"]
+    assert "GET /docs" not in ops  # FastAPI's own pages are not operations
     assert ops["DELETE /accounts/{account_id}"]["declared"] is True
     assert ops["DELETE /accounts/{account_id}"]["seen"] == 0
     upgrade_op = ops["POST /accounts/{account_id}/upgrade"]
