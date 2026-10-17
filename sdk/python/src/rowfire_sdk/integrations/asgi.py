@@ -15,11 +15,14 @@ catalog, so the dashboard can offer operations before anyone has called them.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, MutableMapping
 from typing import Any, Callable
 
 import rowfire_sdk
 from rowfire_sdk._context import Operation
+
+log = logging.getLogger("rowfire_sdk")
 
 Scope = MutableMapping[str, Any]
 Receive = Callable[[], Awaitable[dict[str, Any]]]
@@ -40,7 +43,11 @@ class RowfireMiddleware:
             # The router knows every route, called or not: list them all once,
             # so the catalog shows operations nobody has used yet.
             self._declared = True
-            client.declare_operations(declared_routes(scope.get("app")))
+            try:
+                client.declare_operations(declared_routes(scope.get("app")))
+            except Exception:
+                # Never let the SDK fail the request it is observing.
+                log.exception("rowfire-sdk: could not list the app's routes")
 
         op = Operation(
             resolve=lambda: route_name(scope),

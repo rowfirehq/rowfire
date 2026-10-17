@@ -70,3 +70,16 @@ def test_plain_starlette_routes_are_named_too(start, ingest):
         http.get("/ping/me")
     assert rowfire.flush()
     assert ingest.events[0]["data"] == {"params.who": "me"}
+
+
+def test_an_sdk_failure_never_fails_the_request(start, ingest, fastapi_app, monkeypatch):
+    client = start([UPGRADED])
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("bug in the SDK")
+
+    monkeypatch.setattr(client, "declare_operations", broken)
+    monkeypatch.setattr(client, "observe_operation", broken)
+    monkeypatch.setattr(client, "operation_finished", broken)
+    with TestClient(fastapi_app) as http:
+        assert http.post("/accounts/42/upgrade").status_code == 200
