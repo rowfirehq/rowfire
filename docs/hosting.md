@@ -105,7 +105,7 @@ trigger and rule are left out of each visitor's sample.
 
 **Pushed events (not shown to visitors).** The web service also answers
 `/v1/events`, `/v1/catalog` and `/v1/config`, where apps running the in-app
-SDK ([`sdk/python`](../sdk/python)) send events, for trying the SDK against
+SDK ([rowfire-sdk-python](https://github.com/rowfirehq/rowfire-sdk-python)) send events, for trying the SDK against
 real apps. It costs nothing extra: no second service, the same database.
 Every one of those requests needs an API key, and nothing about them appears
 in the demo: visitors cannot make keys, and the `/api/app-events` routes do

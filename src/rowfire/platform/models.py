@@ -629,7 +629,7 @@ class RecipientBudget(SQLModel, table=True):
 
 # ---------------------------------------------------------- pushed events
 #
-# Events an app sends with the in-app SDK (sdk/python), received by the ingest
+# Events an app sends with the in-app SDK (rowfirehq/rowfire-sdk-python), received by the ingest
 # server (rowfire ingest) rather than read from the customer's database.
 
 

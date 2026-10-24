@@ -1,7 +1,7 @@
 """Pushed events: the keys apps send them with, storing what arrives, the
 catalog apps report, and how long events are kept.
 
-The in-app SDK (sdk/python) sends three things to the ingest server
+The in-app SDK (rowfirehq/rowfire-sdk-python) sends three things to the ingest server
 (`rowfire ingest`, ingest.py), which hands them here:
 
   events    stored in `ingested_event`, deduplicated on the SDK's event id,

@@ -157,7 +157,7 @@ class Subscription(BaseModel):
     """What an app's SDK should send: an operation, optionally a table write
     in it, the conditions that must hold, and the fields to carry.
 
-    Matched inside the app (sdk/python), which fetches these from
+    Matched inside the app (rowfirehq/rowfire-sdk-python), which fetches these from
     `GET /v1/config` on the ingest server. A trigger then reads the events
     that arrive, from an `rowfire://events` source.
     """

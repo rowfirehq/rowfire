@@ -545,7 +545,7 @@ they do on Postgres; the SQL is Postgres SQL.
 ## Pushed events: no database login
 
 For a team that will not grant a database login at all, an app can push its
-events instead, with the in-app SDK in [`sdk/python`](sdk/python). Installed
+events instead, with the in-app SDK, [rowfire-sdk-python](https://github.com/rowfirehq/rowfire-sdk-python) (MIT). Installed
 once, it tags each ORM write with the operation that caused it (a route, a
 job), matches the subscriptions in your definitions inside the app, and sends
 only what matches, with only the fields named. Rowfire never connects to the

@@ -1,8 +1,9 @@
 """Pushed events: the ingest server, the events source, and the whole loop.
 
 Requires the control-plane Postgres. The last test runs the real in-app SDK
-(sdk/python) against a real ingest server and lets the scheduler fire on what
-arrives -- the path an app that never grants a database login actually takes.
+(rowfirehq/rowfire-sdk-python, a dev dependency) against a real ingest server
+and lets the scheduler fire on what arrives -- the path an app that never
+grants a database login actually takes.
 """
 
 from __future__ import annotations

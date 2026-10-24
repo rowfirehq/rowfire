@@ -28,7 +28,7 @@ envVarGroups:
         value: https://github.com/rowfirehq/rowfire/discussions
       - key: ROWFIRE_WORKSPACE_IDLE_HOURS
         value: "24"
-      # Events apps push to /v1/events (with the in-app SDK, sdk/python) are
+      # Events apps push to /v1/events (with the in-app SDK, rowfirehq/rowfire-sdk-python) are
       # pruned by the worker after this many days. The database has a 1 GB disk.
       - key: ROWFIRE_EVENT_RETENTION_DAYS
         value: "30"
