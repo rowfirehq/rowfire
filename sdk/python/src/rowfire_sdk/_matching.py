@@ -6,12 +6,12 @@ change inside it, which conditions must hold, and which fields to send:
     {
       "id": "goodwill_refund",
       "operation": "POST /admin/charges/{id}/refund",
-      "on": {"table": "charges", "kind": ["update"], "changed": "status"},
+      "write": {"table": "charges", "kind": ["update"], "changed": "status"},
       "where": {"row.status": "refunded", "actor.role": "support"},
       "fields": ["row.id", "row.account_id", "row.amount", "actor.id"]
     }
 
-Without `on`, it fires when the operation completes successfully.
+Without `write`, it fires when the operation completes successfully.
 
 Field paths name where a value comes from: `row.<column>` (the row after the
 change), `old.<column>` (its value before), `actor.<attr>`, `params.<name>`
@@ -94,7 +94,9 @@ class Subscription:
             operation = str(raw["operation"])
         except KeyError as exc:
             raise SubscriptionError(f"missing {exc.args[0]!r}") from None
-        on = raw.get("on") or {}
+        # `write`, not `on`: in YAML 1.1 a bare `on:` key reads as `true`, and
+        # these are written in Rowfire's YAML definitions. `on` still works.
+        on = raw.get("write") or raw.get("on") or {}
         table = on.get("table")
         kinds = on.get("kind", ["insert", "update", "delete"] if table else [])
         if isinstance(kinds, str):
@@ -102,7 +104,7 @@ class Subscription:
         if not set(kinds) <= KINDS:
             raise SubscriptionError(f"{sub_id}: unknown kind in {kinds!r}")
         if on and not table:
-            raise SubscriptionError(f"{sub_id}: 'on' needs a table")
+            raise SubscriptionError(f"{sub_id}: 'write' needs a table")
         where = raw.get("where") or {}
         fields = list(raw.get("fields") or [])
         for path in [*where, *fields]:
@@ -125,7 +127,7 @@ def _check_path(sub_id: str, path: str, is_change: bool) -> None:
     if namespace not in NAMESPACES or not rest:
         raise SubscriptionError(f"{sub_id}: unknown field {path!r}")
     if namespace in ("row", "old") and not is_change:
-        raise SubscriptionError(f"{sub_id}: {path!r} needs an 'on' table")
+        raise SubscriptionError(f"{sub_id}: {path!r} needs a 'write' table")
 
 
 class Facts:

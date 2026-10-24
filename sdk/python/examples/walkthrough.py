@@ -150,14 +150,14 @@ SUBSCRIPTIONS = [
     {
         "id": "goodwill_refund",
         "operation": "POST /admin/charges/{id}/refund",
-        "on": {"table": "charges", "kind": "update", "changed": "status"},
+        "write": {"table": "charges", "kind": "update", "changed": "status"},
         "where": {"row.status": "refunded", "actor.role": "support"},
         "fields": ["row.id", "row.amount", "old.status", "actor.id"],
     },
     {
         "id": "shipment_failed_refund",
         "operation": "job AutoRefundWorker",
-        "on": {"table": "charges", "kind": "update", "changed": "status"},
+        "write": {"table": "charges", "kind": "update", "changed": "status"},
         "where": {"row.status": "refunded"},
         "fields": ["row.id", "row.account_id"],
     },

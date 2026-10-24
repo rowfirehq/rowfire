@@ -9,7 +9,7 @@ from rowfire_sdk._matching import Ceiling, Facts, Matcher, evaluate, plain
 REFUND = {
     "id": "goodwill_refund",
     "operation": "POST /admin/charges/{id}/refund",
-    "on": {"table": "charges", "kind": "update", "changed": "status"},
+    "write": {"table": "charges", "kind": "update", "changed": "status"},
     "where": {"row.status": "refunded", "actor.role": "support"},
     "fields": ["row.id", "row.amount", "actor.id"],
 }
@@ -61,7 +61,7 @@ def test_malformed_subscriptions_are_rejected_without_breaking_the_rest():
         {"operation": "x"},
         {"id": "unknown_ns", "operation": "x", "fields": ["request.body"]},
         {"id": "row_without_table", "operation": "x", "fields": ["row.id"]},
-        {"id": "bad_kind", "operation": "x", "on": {"table": "t", "kind": "upsert"}},
+        {"id": "bad_kind", "operation": "x", "write": {"table": "t", "kind": "upsert"}},
     ]
     matcher = Matcher([*bad, REFUND], Ceiling())
     assert len(matcher.rejected) == 4
@@ -102,3 +102,9 @@ def test_plain_makes_values_json_ready():
     )
     assert plain(Decimal("NaN")) == "NaN"
     assert plain(object()).startswith("<object")
+
+
+def test_on_is_still_accepted_for_write():
+    legacy = {**REFUND, "id": "legacy"}
+    legacy["on"] = legacy.pop("write")
+    assert Matcher([legacy], Ceiling()).resolve(REFUND["operation"]).tables["charges"]

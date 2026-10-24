@@ -42,7 +42,7 @@ SUBSCRIPTIONS = [
     {
         "id": "charge_refunded",
         "operation": "job AutoRefundWorker",
-        "on": {"table": "charges", "kind": "update", "changed": "status"},
+        "write": {"table": "charges", "kind": "update", "changed": "status"},
         "fields": ["row.id", "old.status", "row.status"],
     },
 ]

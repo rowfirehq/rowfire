@@ -14,9 +14,11 @@ So that someone can write a subscription without reading the code, the SDK
 also sends a **catalog**: the operations the app has, the tables each one
 writes, the columns that change and the values they take.
 
-This is a prototype of the app side only. Rowfire has no `/v1/events`,
-`/v1/config` or `/v1/catalog` endpoint yet; the tests and the benchmark run against
-`rowfire_sdk.testing.FakeIngest`.
+Rowfire's side is `rowfire ingest` (see the root README's "Pushed events"
+section): point `endpoint` at it and create an `api_key` with
+`rowfire platform ingest-key create`. The SDK's own tests and benchmark run
+against `rowfire_sdk.testing.FakeIngest`; `tests/test_ingest.py` runs this SDK
+against the real ingest server, through to a fire.
 
 ## Using it
 
@@ -50,14 +52,15 @@ The middleware names a request by its route *template*
 {
   "id": "goodwill_refund",
   "operation": "POST /admin/charges/{id}/refund",
-  "on": {"table": "charges", "kind": ["update"], "changed": "status"},
+  "write": {"table": "charges", "kind": ["update"], "changed": "status"},
   "where": {"row.status": "refunded", "actor.role": "support"},
   "fields": ["row.id", "row.amount", "old.status", "actor.id", "params.id"]
 }
 ```
 
 - `operation`: an exact name or a glob (`POST /admin/*`).
-- `on`: a table write inside that operation. Without it, the subscription fires
+- `write`: a table write inside that operation (`on` is accepted too; it is
+  `write` because a bare `on:` key reads as `true` in YAML). Without it, the subscription fires
   when the operation ends without an exception and with a status below 400.
 - `where`: equality conditions, or a list meaning "any of".
 - Field paths: `row.<column>` (after the write), `old.<column>` (before it),
@@ -192,8 +195,8 @@ for CPU.
 
 ## Not done yet
 
-- Rowfire's side: the ingest, config and catalog endpoints, dedup by event id,
-  an event store that triggers can query, and the picker UI over the catalog.
+- The dashboard screens over the catalog (a picker that builds subscriptions);
+  the read endpoints exist (`/api/app-events/...`).
 - Limits on what the catalog observes (opt-in per column, for instance), and a
   default ceiling.
 - Core SQL (`session.execute(update(...))`) bypasses the ORM's unit of work and

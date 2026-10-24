@@ -90,7 +90,7 @@ def operation(
 ) -> Iterator[Operation]:
     """Run the block as one operation; also usable as a decorator.
 
-    Subscriptions without an `on` table fire when it ends without an exception
+    Subscriptions without a `write` table fire when it ends without an exception
     (and, for a request, with a status below 400).
     """
     op = name if isinstance(name, Operation) else Operation(name, actor=actor, params=params)
