@@ -146,6 +146,15 @@ process does everything else. The design follows `sentry-python`
     the SDK logs why and keeps retries in memory instead of failing the app.
   - Events are **held until the transaction commits** and dropped on rollback.
   - Nothing is sampled.
+- **A backlog moves to the spool instead of being dropped.** Past `max_queue`
+  (10,000 queued events) the background thread sends the backlog through the
+  spool, where an event takes about 266 bytes of JSON instead of about 624 as
+  Python objects (or none, on disk). The request thread only drops past
+  `max_queue_hard` (50,000, about 30 MB at worst), so a job that updates
+  15,000 bookings in one transaction delivers all 15,000. A single commit
+  larger than `max_queue_hard` still loses the excess, counted; raise it for
+  such jobs. While batches wait in the spool, newer events queue behind them,
+  so events arrive in the order they happened.
 - **Events are not lost silently.** Every event carries a random id, so Rowfire
   can drop the copy a retry makes. When an event is lost (the in-memory queue
   is full, the spool is over its cap, or Rowfire rejected the batch), the count

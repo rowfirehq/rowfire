@@ -84,6 +84,7 @@ class Worker:
         *,
         batch_size: int = 200,
         max_queue: int = 10_000,
+        max_queue_hard: int = 50_000,
         flush_interval: float = 5.0,
         flush_jitter: float = 1.0,
         backoff_base: float = 1.0,
@@ -95,7 +96,12 @@ class Worker:
         self._spool = spool
         self._counters = counters
         self._batch_size = batch_size
+        # Past `max_queue` the background thread moves the backlog into the
+        # spool (compact JSON, or disk) instead of holding it as objects; only
+        # past `max_queue_hard` does the request thread drop. About 600 bytes
+        # an event queued, so the hard limit is roughly 30 MB at worst.
         self._max_queue = max_queue
+        self._max_queue_hard = max(max_queue_hard, max_queue)
         self._flush_interval = flush_interval
         self._flush_jitter = flush_jitter
         self._backoff_base = backoff_base
@@ -147,7 +153,7 @@ class Worker:
             return
         dropped = 0
         with self._lock:
-            room = self._max_queue - len(self._buffer)
+            room = self._max_queue_hard - len(self._buffer)
             if room < len(events):
                 dropped = len(events) - max(room, 0)
                 events = events[: max(room, 0)]
@@ -256,14 +262,20 @@ class Worker:
     def _cycle(self, deadline: float | None = None) -> None:
         with self._lock:
             pending, self._buffer = self._buffer, []
+        # Send straight away in the common case. Go through the spool instead
+        # when batches are already waiting there, so older events go first,
+        # or when the backlog is past `max_queue`, so it stops costing memory
+        # as objects while it is sent.
+        direct = len(pending) <= self._max_queue and not self._spool_waiting()
         for start in range(0, len(pending), self._batch_size):
             chunk = pending[start : start + self._batch_size]
             lost = self._counters.take_lost()
             body = encode(chunk, lost)
-            if self._backing_off() or _past(deadline):
+            if not direct or self._backing_off() or _past(deadline):
                 self._keep(body, len(chunk))
                 continue
-            self._deliver(body, len(chunk), lost, deadline, spooled=None)
+            if not self._deliver(body, len(chunk), lost, deadline, spooled=None):
+                direct = False
         # A batch with no events still carries loss counts.
         if not pending and self._counters.lost and not self._backing_off():
             lost = self._counters.take_lost()
@@ -318,6 +330,12 @@ class Worker:
         if spooled is not None:
             self._spool.remove(spooled)
         return True
+
+    def _spool_waiting(self) -> bool:
+        try:
+            return self._spool.has_pending()
+        except OSError:
+            return False
 
     def _keep(self, body: bytes, count: int) -> None:
         try:

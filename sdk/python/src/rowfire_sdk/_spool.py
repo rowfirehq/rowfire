@@ -50,6 +50,9 @@ class MemorySpool:
     def pending(self) -> int:
         return sum(n for _, _, n in self._batches)
 
+    def has_pending(self) -> bool:
+        return bool(self._batches)
+
     def reset(self) -> None:
         self._batches.clear()
         self._bytes = 0
@@ -100,6 +103,9 @@ class DiskSpool:
 
     def pending(self) -> int:
         return sum(_count(n) for n in self._names() if self._ours(n))
+
+    def has_pending(self) -> bool:
+        return any(self._ours(n) for n in self._names())
 
     def reset(self) -> None:
         # The files belong to the parent process after a fork; nothing to reset.

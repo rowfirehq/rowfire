@@ -74,12 +74,43 @@ def test_a_rejected_batch_is_dropped_and_reported(start, ingest):
     assert rowfire.stats()["lost"] == {"rejected_status_400": 1}
 
 
-def test_a_full_queue_drops_and_counts_instead_of_blocking(start, ingest):
+def test_past_the_hard_limit_the_queue_drops_and_counts_instead_of_blocking(start, ingest):
     ingest.delay = 0.5
-    client = start([CHECKOUT], max_queue=10, batch_size=1000, flush_interval=60)
+    client = start([CHECKOUT], max_queue=5, max_queue_hard=10, batch_size=1000, flush_interval=60)
     for n in range(15):
         checkout(n)
     assert client.stats()["lost"] == {"queue_overflow": 5}
+
+
+def test_a_burst_past_the_soft_limit_is_spooled_not_dropped(start, ingest):
+    # One commit handing over far more events than max_queue at once, like a
+    # job that updates thousands of bookings in a single transaction.
+    client = start([CHECKOUT], max_queue=100, max_queue_hard=5_000, batch_size=50)
+    events = [
+        client._event(
+            client.matcher.resolve("POST /checkout").on_complete[0],
+            "POST /checkout",
+            {"params.n": n},
+        )
+        for n in range(1_500)
+    ]
+    client.emit(events)
+    assert rowfire.flush(timeout=10)
+    assert sorted(e["data"]["params.n"] for e in ingest.unique_events) == list(range(1_500))
+    stats = client.stats()
+    assert stats["lost"] == {}
+    assert stats["spooled"] == 1_500  # went through the spool, compact, not as objects
+
+
+def test_events_waiting_in_the_spool_go_out_before_newer_ones(start, ingest):
+    client = start([CHECKOUT], flush_interval=3600)  # one cycle, run by hand below
+    sub = client.matcher.resolve("POST /checkout").on_complete[0]
+    older = client._event(sub, "POST /checkout", {"params.n": 1})
+    newer = client._event(sub, "POST /checkout", {"params.n": 2})
+    client._spool.put(encode([older], {}), 1)  # left from a failed send
+    client.worker._buffer.append(newer)
+    client.worker._cycle()
+    assert [e["data"]["params.n"] for e in ingest.events] == [1, 2]
 
 
 def test_while_rowfire_is_down_batches_wait_in_the_spool(tmp_path, ingest, start):
