@@ -6,6 +6,8 @@ A data source is a named DSN. Its scheme picks the driver:
     mysql:// mysql+pymysql://        MySQL (and MariaDB), through PyMySQL
     mariadb://
     supabase://                      Supabase, through its Management API (supabase.py)
+    rowfire://events                 events apps pushed with the in-app SDK, kept in
+                                     Rowfire's own database (see EventsConnection)
 
 Everything above this module -- the engine, the scheduler, the schema reader,
 the API -- talks to a `SourceConnection` and does not care which one it got.
@@ -28,16 +30,23 @@ local wall-clock time in one would place its rows hours off.
 from __future__ import annotations
 
 import json
+import re
 import ssl
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, Literal
 from urllib.parse import parse_qs, unquote, urlsplit
 
-Kind = Literal["postgres", "mysql", "supabase"]
+Kind = Literal["postgres", "mysql", "supabase", "events"]
 
-KINDS: tuple[Kind, ...] = ("postgres", "mysql", "supabase")
+KINDS: tuple[Kind, ...] = ("postgres", "mysql", "supabase", "events")
+
+# The one DSN of the events source. Which workspace's events it reads is never
+# taken from what a user typed: `pin_workspace` sets it from the connection's
+# own workspace whenever the DSN is used.
+EVENTS_DSN = "rowfire://events"
 
 _SCHEMES: dict[str, Kind] = {
     "postgres": "postgres",
@@ -47,12 +56,23 @@ _SCHEMES: dict[str, Kind] = {
     "mysql+pymysql": "mysql",
     "mariadb": "mysql",
     "supabase": "supabase",
+    "rowfire": "events",
 }
 
 # The sqlglot dialect each engine's SQL is parsed and re-rendered in.
-DIALECTS: dict[Kind, str] = {"postgres": "postgres", "mysql": "mysql", "supabase": "postgres"}
+DIALECTS: dict[Kind, str] = {
+    "postgres": "postgres",
+    "mysql": "mysql",
+    "supabase": "postgres",
+    "events": "postgres",
+}
 
-LABELS: dict[Kind, str] = {"postgres": "PostgreSQL", "mysql": "MySQL", "supabase": "Supabase"}
+LABELS: dict[Kind, str] = {
+    "postgres": "PostgreSQL",
+    "mysql": "MySQL",
+    "supabase": "Supabase",
+    "events": "App events",
+}
 
 
 class EngineError(Exception):
@@ -72,9 +92,21 @@ def kind_of(dsn: str) -> Kind:
         shown = scheme or "no scheme"
         raise EngineError(
             f"unsupported database ({shown}). Use a postgresql://, mysql:// or "
-            f"supabase:// connection string."
+            f"supabase:// connection string, or {EVENTS_DSN}."
         )
     return kind
+
+
+def pin_workspace(dsn: str, workspace_id: Any) -> str:
+    """An events DSN bound to `workspace_id`; any other DSN unchanged.
+
+    Called wherever a stored or submitted DSN is about to be used, with the
+    workspace the request or connection belongs to. A `workspace=` someone put
+    in the DSN themselves is discarded, so no workspace can read another's.
+    """
+    if not dsn.strip().lower().startswith("rowfire://"):
+        return dsn
+    return f"{EVENTS_DSN}?workspace={uuid.UUID(str(workspace_id))}"
 
 
 def summarise(dsn: str) -> str:
@@ -87,6 +119,8 @@ def summarise(dsn: str) -> str:
         from .supabase import summarise as summarise_supabase
 
         return summarise_supabase(dsn)
+    if dsn.strip().lower().startswith("rowfire://"):
+        return "events pushed by apps running the SDK"
     remainder = dsn.split("://", 1)[-1]
     if "@" in remainder:
         remainder = remainder.rsplit("@", 1)[1]
@@ -200,6 +234,16 @@ def connect(dsn: str, statement_timeout_ms: int = 30_000) -> Iterator[SourceConn
         from . import supabase
 
         yield supabase.connect(dsn)  # type: ignore[misc]
+        return
+    if kind == "events":
+        raw = _open_events(dsn, statement_timeout_ms)
+        try:
+            yield EventsConnection(raw)
+        finally:
+            try:
+                raw.close()
+            except Exception:  # noqa: BLE001 -- closing a dead socket is not news
+                pass
         return
     opener = _open_postgres if kind == "postgres" else _open_mysql
     raw = opener(dsn, statement_timeout_ms)
@@ -349,7 +393,7 @@ def _bind(params: dict[str, Any], kind: Kind) -> dict[str, Any]:
 
 def _translate(exc: Exception, kind: Kind) -> EngineError:
     """A driver error as an EngineError, with a timeout called out as one."""
-    if kind == "postgres":
+    if kind in ("postgres", "events"):
         import psycopg
 
         if isinstance(exc, psycopg.errors.QueryCanceled):
@@ -372,3 +416,167 @@ _TIMEOUT_MESSAGE = (
     "query exceeded statement_timeout. Narrow the window with --days, "
     "or raise source.statement_timeout_ms in the definitions file."
 )
+
+
+# ------------------------------------------------------------- events
+#
+# Events apps pushed with the in-app SDK live in Rowfire's own database, in
+# `ingested_event`, next to tables a trigger must never read (stored
+# credentials among them). A trigger over them is still ordinary SQL against
+# a table called `events`; what keeps it there:
+#
+#   1. rows: each connection gets a temporary view `events` over its own
+#      workspace's rows only, and a temporary relation is found before any
+#      other of the same name;
+#   2. tables: every query is parsed before it runs and refused if it names
+#      any table but `events` (or its own WITH blocks), or calls a function
+#      that reads files or runs SQL given as text;
+#   3. writes: the session is read-only, as for every other source.
+#
+# Set ROWFIRE_EVENTS_READER_DSN to a role that may only SELECT from
+# `ingested_event` and the database enforces (2) as well.
+
+EVENTS_READER_DSN_ENV = "ROWFIRE_EVENTS_READER_DSN"
+
+_EVENTS_VIEW = """
+    CREATE TEMPORARY VIEW events AS
+    SELECT id AS seq, event_id, subscription, operation, occurred_at, received_at,
+           config_version, data
+    FROM public.ingested_event
+    WHERE workspace_id = {workspace}
+"""
+
+# Functions that read the server's files or settings, or run SQL passed to
+# them as a string -- query_to_xml('select * from connection', ...) would
+# otherwise walk straight past the table check.
+_REFUSED_FUNCTIONS = (
+    "pg_",
+    "query_to_",
+    "table_to_",
+    "cursor_to_",
+    "schema_to_",
+    "database_to_",
+    "dblink",
+    "lo_",
+    "set_config",
+    "current_setting",
+)
+
+_EVENTS_COLUMNS: list[tuple[str, str, bool]] = [
+    ("seq", "bigint", False),
+    ("event_id", "text", False),
+    ("subscription", "text", False),
+    ("operation", "text", True),
+    ("occurred_at", "timestamp with time zone", True),
+    ("received_at", "timestamp with time zone", False),
+    ("config_version", "text", True),
+    ("data", "jsonb", False),
+]
+
+
+class EventsConnection(SourceConnection):
+    """A read-only view of one workspace's pushed events, as table `events`."""
+
+    def __init__(self, raw: Any) -> None:
+        super().__init__(raw, "events")
+
+    def cursor(self) -> Any:
+        # Everything goes through fetch(), where the query is checked.
+        raise EngineError("the events source only runs checked queries")
+
+    def fetch(
+        self, sql: str, params: dict[str, Any] | None = None
+    ) -> tuple[list[dict[str, Any]], dict[str, str]]:
+        check_events_query(sql)
+        return super().fetch(sql, params)
+
+    def server_info(self) -> dict[str, Any]:
+        return {"version": "Rowfire events", "database": "events", "read_only": True}
+
+    def default_schema(self) -> str:
+        return "events"
+
+    @staticmethod
+    def columns() -> list[tuple[str, str, bool]]:
+        """(name, type, nullable) of the `events` table, for the schema reader."""
+        return list(_EVENTS_COLUMNS)
+
+
+def check_events_query(sql: str) -> None:
+    """Refuse a query that reaches past the `events` table."""
+    import sqlglot
+    from sqlglot import exp
+
+    # The compiled query carries driver placeholders; read them as named ones.
+    text = re.sub(r"%\((\w+)\)s", r":\1", sql).replace("%%", "%")
+    try:
+        tree = sqlglot.parse_one(text, dialect="postgres")
+    except sqlglot.errors.ParseError as exc:
+        raise EngineError(f"could not check the query: {clean(exc)}") from exc
+
+    allowed = {"events"} | {cte.alias_or_name.lower() for cte in tree.find_all(exp.CTE)}
+    for table in tree.find_all(exp.Table):
+        qualified = table.args.get("db") or table.args.get("catalog")
+        if qualified or not isinstance(table.this, exp.Identifier):
+            raise EngineError(
+                "an events query reads only the table `events`, unqualified; "
+                f"found `{table.sql(dialect='postgres')}`"
+            )
+        if table.name.lower() not in allowed:
+            raise EngineError(
+                f"an events query reads only the table `events`; found `{table.name}`"
+            )
+    for func in tree.find_all(exp.Func):
+        name = (func.name if isinstance(func, exp.Anonymous) else func.sql_name()).lower()
+        if name.startswith(_REFUSED_FUNCTIONS):
+            raise EngineError(f"`{name}` is not available in an events query")
+
+
+def _open_events(dsn: str, statement_timeout_ms: int) -> Any:
+    import os
+
+    import psycopg
+    from psycopg import sql as psql
+    from psycopg.rows import dict_row
+
+    query = parse_qs(urlsplit(dsn).query)
+    try:
+        workspace = uuid.UUID(query["workspace"][0])
+    except (KeyError, IndexError, ValueError):
+        raise EngineError(
+            "the events source was used without a workspace; this is a bug in Rowfire"
+        ) from None
+
+    target = os.environ.get(EVENTS_READER_DSN_ENV)
+    if not target:
+        from .platform.db import PlatformError, resolve_dsn
+
+        try:
+            target = resolve_dsn()
+        except PlatformError as exc:
+            raise EngineError(str(exc)) from exc
+    if target.lower().startswith("postgresql+psycopg://"):
+        target = "postgresql://" + target.split("://", 1)[1]
+
+    try:
+        conn = psycopg.connect(target, row_factory=dict_row, connect_timeout=10)
+    except psycopg.Error as exc:
+        raise EngineError(f"could not open the events store: {clean(exc)}") from exc
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            # Before the session turns read-only, which forbids CREATE. The
+            # workspace is a parsed UUID, rendered as a literal: DDL takes no
+            # bind parameters.
+            cur.execute(psql.SQL(_EVENTS_VIEW).format(workspace=psql.Literal(str(workspace))))
+            cur.execute("SET default_transaction_read_only = on")
+            cur.execute(
+                "SELECT set_config('statement_timeout', %s, false)",
+                (str(int(statement_timeout_ms)),),
+            )
+        conn.autocommit = False
+        conn.read_only = True
+    except psycopg.Error as exc:
+        conn.close()
+        raise EngineError(f"could not prepare the events session: {clean(exc)}") from exc
+    return conn

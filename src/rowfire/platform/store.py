@@ -99,7 +99,11 @@ def reveal_dsn(connection: Connection, master_key: bytes | None = None) -> str:
         key_id=connection.key_id,
         algorithm=connection.algorithm,
     )
-    return crypto.decrypt(envelope, master_key=master_key)
+    from ..sources import pin_workspace
+
+    # An events source reads the events of the workspace the connection
+    # belongs to, whatever its stored DSN says.
+    return pin_workspace(crypto.decrypt(envelope, master_key=master_key), connection.workspace_id)
 
 
 def get_connection(

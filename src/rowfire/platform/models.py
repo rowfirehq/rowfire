@@ -13,19 +13,21 @@ later means taking that rebuild while the ledger is live.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import (
     BigInteger,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Index,
     LargeBinary,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
@@ -623,3 +625,113 @@ class RecipientBudget(SQLModel, table=True):
     window_start: datetime = Field(sa_column=_ts(nullable=False))
     sent_count: int = Field(default=0)
     updated_at: datetime = Field(default_factory=_now, sa_column=_ts(nullable=False))
+
+
+# ---------------------------------------------------------- pushed events
+#
+# Events an app sends with the in-app SDK (sdk/python), received by the ingest
+# server (rowfire ingest) rather than read from the customer's database.
+
+
+class IngestKey(SQLModel, table=True):
+    """An API key an app's SDK sends events with.
+
+    Only a SHA-256 of the key is stored. That is enough for a key of 256
+    random bits: there is nothing to guess, so a slow password hash would buy
+    nothing and cost every request. The prefix is kept in the clear so a key
+    can be recognised in a list without being recoverable.
+    """
+
+    __tablename__ = "ingest_key"
+    __table_args__ = (UniqueConstraint("key_hash", name="uq_ingest_key_hash"),)
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    workspace_id: uuid.UUID = Field(default=DEFAULT_WORKSPACE_ID, index=True)
+    name: str
+    key_prefix: str
+    key_hash: str
+    created_at: datetime = Field(default_factory=_now, sa_column=_ts(nullable=False))
+    last_used_at: datetime | None = Field(default=None, sa_column=_ts())
+    revoked_at: datetime | None = Field(default=None, sa_column=_ts())
+
+
+class IngestedEvent(SQLModel, table=True):
+    """One event pushed by an app, as received.
+
+    `received_at` is set by the database when the batch is stored, so every
+    ingest server shares one clock, and it is what a trigger over these events
+    polls on: an event delivered hours late after an outage still lands inside
+    the next poll's window, where `occurred_at` (the app's clock) would fall
+    behind the watermark and be missed. `occurred_at` stays in the row for the
+    business timing a query wants.
+
+    The unique constraint on the SDK's event id is the duplicate guard: a
+    batch resent after a timeout that had in fact arrived inserts nothing.
+
+    Not partitioned yet. Partitioning by day would make retention a DROP
+    rather than a DELETE, but Postgres requires the partition key in every
+    unique constraint, and `received_at` differs between a batch and its
+    retry, so it would break the duplicate guard. When volume calls for it,
+    partition on `occurred_at`, which a retry repeats.
+    """
+
+    __tablename__ = "ingested_event"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "event_id", name="uq_ingested_event_id"),
+        # What a trigger over one subscription reads, newest window first.
+        Index("ix_ingested_event_poll", "workspace_id", "subscription", "received_at"),
+        Index("ix_ingested_event_received", "received_at"),
+    )
+
+    id: int | None = Field(
+        default=None,
+        sa_column=Column(BigInteger, primary_key=True, autoincrement=True),
+    )
+    workspace_id: uuid.UUID = Field(default=DEFAULT_WORKSPACE_ID)
+    event_id: str = Field(sa_column=Column(Text, nullable=False))
+    subscription: str = Field(sa_column=Column(Text, nullable=False))
+    operation: str | None = Field(default=None, sa_column=Column(Text))
+    occurred_at: datetime | None = Field(default=None, sa_column=_ts())
+    received_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    )
+    config_version: str | None = Field(default=None, sa_column=Column(Text))
+    data: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
+
+
+class CatalogSnapshot(SQLModel, table=True):
+    """The latest catalog one SDK instance (one app process) sent.
+
+    Replaced on every send: the SDK's counts are cumulative per process, so the
+    newest snapshot holds everything the older ones did. The dashboard adds up
+    the instances seen recently.
+    """
+
+    __tablename__ = "catalog_snapshot"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "instance_id", name="uq_catalog_snapshot_instance"),
+    )
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    workspace_id: uuid.UUID = Field(default=DEFAULT_WORKSPACE_ID)
+    instance_id: str
+    started_at: datetime | None = Field(default=None, sa_column=_ts())
+    received_at: datetime = Field(default_factory=_now, sa_column=_ts(nullable=False))
+    snapshot: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
+
+
+class SdkLoss(SQLModel, table=True):
+    """Events an SDK reported it could not deliver, by reason.
+
+    Counted rather than logged, so a rule owner can see "12 events lost to a
+    full queue on Tuesday" next to what did arrive.
+    """
+
+    __tablename__ = "sdk_loss"
+    __table_args__ = (UniqueConstraint("workspace_id", "reason", "day", name="uq_sdk_loss_day"),)
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    workspace_id: uuid.UUID = Field(default=DEFAULT_WORKSPACE_ID)
+    reason: str
+    day: date = Field(sa_column=Column(Date, nullable=False))
+    count: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))

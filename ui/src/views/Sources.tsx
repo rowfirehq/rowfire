@@ -37,6 +37,8 @@ function kindOfDsn(dsn: string): SourceKind | null {
   if (["postgres", "postgresql", "postgresql+psycopg"].includes(scheme)) return "postgres";
   if (["mysql", "mysql+pymysql", "mariadb"].includes(scheme)) return "mysql";
   if (scheme === "supabase") return "supabase";
+  // rowfire://events: what apps running the in-app SDK pushed.
+  if (scheme === "rowfire") return "events";
   return null;
 }
 

@@ -111,6 +111,12 @@ def read_schema(conn: Any, schema: str | None = None) -> dict[str, Table]:
     `schema` defaults to where the source keeps its tables: `public` on
     Postgres, the connected database on MySQL.
     """
+    if conn.kind == "events":
+        # One fixed table; its catalogue is not the source's to browse.
+        table = Table(name="events", schema="events", primary_key="seq")
+        for name, pg_type, nullable in conn.columns():
+            table.columns.append(Column(name=name, pg_type=_base_type(pg_type), nullable=nullable))
+        return {"events": table}
     if schema is None:
         schema = conn.default_schema()
     if conn.kind == "mysql":

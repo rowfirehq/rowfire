@@ -167,6 +167,27 @@ services:
     command: ["worker", "--interval", "5"]
     restart: unless-stopped
 
+  # Where apps running the in-app SDK (sdk/python) send their events. Unlike
+  # `ui`, it is meant to be reached by other machines: every request needs an
+  # API key (`rowfire platform ingest-key create`), and it serves only
+  # /v1/events, /v1/catalog and /v1/config. Published on all interfaces for
+  # that reason; put TLS in front of it outside a dev machine.
+  ingest:
+    build: .
+    image: rowfire
+    depends_on:
+      controlplane:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    environment:
+      ROWFIRE_PLATFORM_DSN: postgresql+psycopg://rowfire:rowfire@controlplane:5432/rowfire_platform
+    ports:
+      - "${ROWFIRE_INGEST_PORT:-8100}:8100"
+    entrypoint: ["rowfire"]
+    command: ["ingest", "--host", "0.0.0.0", "--port", "8100"]
+    restart: unless-stopped
+
   cli:
     build: .
     # Same tag the README's `docker build -t rowfire .` produces, so compose

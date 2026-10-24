@@ -22,6 +22,9 @@ Issues of particular interest:
 - Any way a trigger's SQL can write to, or lock, the database being read
 - Any way to read stored credentials without the master key
 - Any way to drive the local API from a page the user visits
+- On the ingest server (`rowfire ingest`): any way to write events without a valid key,
+  to write into another workspace than the key's, or for a trigger over a `rowfire://events`
+  source to read anything but its own workspace's events
 - On a hosted demo (`ROWFIRE_HOSTED=1`): any way for one visitor to read or change
   another's workspace, or to make the server connect or send anywhere but the
   sample databases and the Demo inbox

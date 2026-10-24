@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from datetime import timedelta
 from pathlib import Path
 
 import click
@@ -16,7 +17,7 @@ from rich.console import Console
 from rich.table import Table
 from sqlmodel import select
 
-from .platform import actions, crypto, scheduler, store
+from .platform import actions, crypto, events, scheduler, store
 from .platform.db import PlatformError, get_engine, session_scope
 from .platform.models import DefinitionVersion, Mode, RuleState, TriggerState
 
@@ -324,6 +325,11 @@ def worker(interval: float, once: bool, max_ticks: int) -> None:
 
     reap_every = 600.0
     last_reap = 0.0
+    # Pushed events are kept until pruned. With ROWFIRE_EVENT_RETENTION_DAYS
+    # set, the worker prunes them hourly; unset, nothing is deleted.
+    retention = _retention_days()
+    prune_every = 3600.0
+    last_prune = 0.0
 
     ticks = 0
     while True:
@@ -337,6 +343,16 @@ def worker(interval: float, once: bool, max_ticks: int) -> None:
                     console.print(f"[dim]reaped {reaped} idle visitor workspace(s)[/dim]")
             except Exception as exc:  # noqa: BLE001 -- the worker must keep polling
                 console.print(f"[red]reap failed[/red] — {str(exc)[:200]}")
+
+        if retention and time.monotonic() - last_prune > prune_every:
+            last_prune = time.monotonic()
+            try:
+                with session_scope(engine) as session:
+                    pruned = events.prune(session, timedelta(days=retention))
+                if pruned:
+                    console.print(f"[dim]pruned {pruned} event(s) older than {retention}d[/dim]")
+            except Exception as exc:  # noqa: BLE001 -- the worker must keep polling
+                console.print(f"[red]prune failed[/red] — {str(exc)[:200]}")
 
         with session_scope(engine) as session:
             # Every workspace: one on a local install, one per visitor on a
@@ -353,6 +369,89 @@ def worker(interval: float, once: bool, max_ticks: int) -> None:
             break
         if outcome is None:
             time.sleep(interval)
+
+
+RETENTION_ENV = "ROWFIRE_EVENT_RETENTION_DAYS"
+
+
+def _retention_days() -> int | None:
+    raw = os.environ.get(RETENTION_ENV, "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or int(raw) < 1:
+        _fail("worker cannot start", [f"{RETENTION_ENV} must be a whole number of days"])
+    return int(raw)
+
+
+# ------------------------------------------------------------ pushed events
+
+
+@platform.group(name="ingest-key")
+def ingest_key() -> None:
+    """API keys that apps running the in-app SDK send events with."""
+
+
+@ingest_key.command(name="create")
+@click.option("--name", required=True, help="Which app or environment this key is for.")
+def ingest_key_create(name: str) -> None:
+    """Create a key. It is shown once; only a hash is stored."""
+    try:
+        with session_scope() as session:
+            key, secret = events.create_key(session, name)
+            prefix = key.key_prefix
+    except PlatformError as exc:
+        _fail("cannot create a key", [str(exc)])
+    console.print(f"\n[green]✓[/green] key [bold]{prefix}…[/bold] for {name}\n")
+    console.print(f"  {secret}\n")
+    console.print(
+        "  Set it as the SDK's api_key. It is not shown again; revoke it with\n"
+        f"  `rowfire platform ingest-key revoke {prefix}` if it leaks.\n",
+        style="dim",
+    )
+
+
+@ingest_key.command(name="list")
+def ingest_key_list() -> None:
+    """Keys and when each was last used. Never the keys themselves."""
+    with session_scope() as session:
+        keys = events.list_keys(session)
+        table = Table(show_header=True, header_style="bold")
+        for column in ("prefix", "name", "created", "last used", "status"):
+            table.add_column(column)
+        for key in keys:
+            table.add_row(
+                f"{key.key_prefix}…",
+                key.name,
+                key.created_at.strftime("%Y-%m-%d"),
+                key.last_used_at.strftime("%Y-%m-%d %H:%M") if key.last_used_at else "never",
+                "revoked" if key.revoked_at else "active",
+            )
+    console.print(table if keys else "\nNo keys yet. `rowfire platform ingest-key create`.\n")
+
+
+@ingest_key.command(name="revoke")
+@click.argument("prefix")
+def ingest_key_revoke(prefix: str) -> None:
+    """Revoke a key by its prefix. Apps using it are refused from now on."""
+    prefix = prefix.rstrip("…")
+    try:
+        with session_scope() as session:
+            events.revoke_key(session, prefix)
+    except events.EventsError as exc:
+        _fail("cannot revoke", [str(exc)])
+    console.print(f"\n[green]✓[/green] revoked {prefix}…\n")
+
+
+@platform.command(name="prune-events")
+@click.option("--days", type=int, required=True, help="Delete events received before this.")
+def prune_events(days: int) -> None:
+    """Delete pushed events older than --days. The worker can do this hourly
+    instead (ROWFIRE_EVENT_RETENTION_DAYS)."""
+    if days < 1:
+        _fail("cannot prune", ["--days must be at least 1"])
+    with session_scope() as session:
+        pruned = events.prune(session, timedelta(days=days))
+    console.print(f"\n[green]✓[/green] pruned {pruned} event(s)\n")
 
 
 def _report(outcome: scheduler.PollOutcome) -> None:
