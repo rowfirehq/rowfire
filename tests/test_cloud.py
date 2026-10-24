@@ -96,14 +96,9 @@ def _captured_exec(monkeypatch) -> tuple[list[list[str]], dict[str, str]]:
     return calls, environ
 
 
-def test_the_ingest_service_listens_on_the_platforms_port(monkeypatch) -> None:
-    from click.testing import CliRunner
-
-    calls, environ = _captured_exec(monkeypatch)
-    environ["PORT"] = "10000"
-    result = CliRunner().invoke(cloud.cloud, ["ingest"])
-    assert result.exit_code == 0, result.output
-    assert calls == [["rowfire", "ingest", "--host", "0.0.0.0", "--port", "10000"]]
+def test_the_web_app_carries_the_ingest_routes() -> None:
+    # No second service to pay for: the web app answers /v1/* itself.
+    assert cloud.settings(RENDER)["ROWFIRE_SERVE_INGEST"] == "1"
 
 
 def test_run_passes_any_command_through_with_the_deploys_settings(monkeypatch) -> None:

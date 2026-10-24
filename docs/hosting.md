@@ -61,7 +61,6 @@ timestamps stay recent. Visitors' workspaces survive deploys.
 | --- | --- | --- |
 | web app (`rowfire-demo`) | Starter | $7/month |
 | worker (`rowfire-demo-worker`) | Starter | $7/month |
-| ingest (`rowfire-ingest`), for pushed events | Starter | $7/month |
 | Postgres (`rowfire-db`) | Basic 256 MB, 1 GB disk | about $6.30/month |
 
 The database holds everything, a schema each: `rowfire_platform` for Rowfire
@@ -104,12 +103,14 @@ visitor shares it, read-only, as they share the MySQL support desk.
 Without both settings the demo has no Supabase source, and the Supabase
 trigger and rule are left out of each visitor's sample.
 
-**Pushed events (not shown to visitors).** `rowfire-ingest` is where apps
-running the in-app SDK ([`sdk/python`](../sdk/python)) send events, for
-trying the SDK against real apps. Nothing about it appears in the demo:
-visitors cannot make keys, and the `/api/app-events` routes do not exist on a
-hosted instance. Everything goes through a shell, on the worker's **Shell**
-tab:
+**Pushed events (not shown to visitors).** The web service also answers
+`/v1/events`, `/v1/catalog` and `/v1/config`, where apps running the in-app
+SDK ([`sdk/python`](../sdk/python)) send events, for trying the SDK against
+real apps. It costs nothing extra: no second service, the same database.
+Every one of those requests needs an API key, and nothing about them appears
+in the demo: visitors cannot make keys, and the `/api/app-events` routes do
+not exist on a hosted instance. Everything goes through a shell, on the
+worker's **Shell** tab:
 
 ```bash
 rowfire cloud run platform ingest-key create --name my-app   # shown once
@@ -123,7 +124,7 @@ Point the SDK at the service's address with that key:
 
 ```python
 rowfire.init(
-    endpoint="https://rowfire-ingest.onrender.com",
+    endpoint="https://rowfire-demo.onrender.com",  # or the custom domain
     api_key=os.environ["ROWFIRE_API_KEY"],
     subscriptions=[...],  # or leave out, and push them as definitions
 )

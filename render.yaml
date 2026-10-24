@@ -7,7 +7,7 @@
 #
 # Everything Rowfire needs is derived from DATABASE_URL and the shared
 # settings by `rowfire cloud` (src/rowfire/cloud.py), so this file stays a
-# list of services. Roughly $27/month: three Starter services and the
+# list of services. Roughly $20/month: two Starter services and the
 # smallest Postgres.
 #
 # The region cannot be changed after creation. The database and both
@@ -28,8 +28,8 @@ envVarGroups:
         value: https://github.com/rowfirehq/rowfire/discussions
       - key: ROWFIRE_WORKSPACE_IDLE_HOURS
         value: "24"
-      # Events pushed to rowfire-ingest are pruned by the worker after this
-      # many days. The database has a 1 GB disk.
+      # Events apps push to /v1/events (with the in-app SDK, sdk/python) are
+      # pruned by the worker after this many days. The database has a 1 GB disk.
       - key: ROWFIRE_EVENT_RETENTION_DAYS
         value: "30"
 
@@ -82,29 +82,6 @@ services:
         sync: false
       - key: SUPABASE_ACCESS_TOKEN
         sync: false
-
-  # Where apps running the in-app SDK (sdk/python) send events. Not part of
-  # the demo visitors see: it serves only /v1/events, /v1/catalog and
-  # /v1/config, every request needs an API key, and keys are only made from
-  # a shell (`rowfire cloud run platform ingest-key create --name <app>`).
-  # It migrates nothing itself; on a first deploy it may restart until the
-  # web service's predeploy has created the tables.
-  - type: web
-    name: rowfire-ingest
-    runtime: docker
-    plan: starter
-    region: frankfurt
-    branch: main
-    dockerfilePath: ./Dockerfile
-    dockerCommand: rowfire cloud ingest
-    healthCheckPath: /healthz
-    autoDeployTrigger: checksPass
-    envVars:
-      - fromGroup: rowfire-demo
-      - key: DATABASE_URL
-        fromDatabase:
-          name: rowfire-db
-          property: connectionString
 
 databases:
   - name: rowfire-db

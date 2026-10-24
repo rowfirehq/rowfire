@@ -586,3 +586,55 @@ def test_the_cli_creates_lists_and_revokes_keys(session) -> None:
     assert revoked.exit_code == 0, revoked.output
     listing = runner.invoke(cli, ["platform", "ingest-key", "list"])
     assert "revoked" in listing.output
+
+
+# ------------------------------------------------ on the UI's own server
+
+
+def _ui_app(monkeypatch, *, serve_ingest: bool, hosted_demo: bool = False):
+    from rowfire import api, hosted
+
+    monkeypatch.setenv(crypto.MASTER_KEY_ENV, crypto.generate_master_key())
+    if serve_ingest:
+        monkeypatch.setenv(api.SERVE_INGEST_ENV, "1")
+    else:
+        monkeypatch.delenv(api.SERVE_INGEST_ENV, raising=False)
+    if hosted_demo:
+        monkeypatch.setattr(hosted, "enabled", lambda: True)
+    api.reset_platform_cache()
+    return api.create_app(session=api.Session())
+
+
+PUBLIC = {"Host": "rowfire-demo.onrender.com"}
+
+
+def test_the_ui_server_can_carry_the_ingest_routes(engine, monkeypatch, api_key) -> None:
+    # One web service on a cloud deploy, rather than paying for a second.
+    app = _ui_app(monkeypatch, serve_ingest=True, hosted_demo=True)
+    with TestClient(app) as client:
+        stored = client.post(
+            "/v1/events",
+            json={"events": [_event(1)]},
+            headers={**PUBLIC, "Authorization": f"Bearer {api_key}"},
+        )
+        assert stored.status_code == 202, stored.text
+        assert client.post("/v1/events", json={"events": []}, headers=PUBLIC).status_code == 401
+        config = client.get("/v1/config", headers={**PUBLIC, "Authorization": f"Bearer {api_key}"})
+        assert config.status_code == 200
+
+        # Only /v1 is exempt from the loopback check; the UI's API is not.
+        assert client.get("/api/health", headers=PUBLIC).status_code == 421
+
+
+def test_without_the_setting_the_ui_server_has_no_ingest_routes(
+    engine, monkeypatch, api_key
+) -> None:
+    app = _ui_app(monkeypatch, serve_ingest=False)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        response = client.post(
+            "/v1/events",
+            json={"events": [_event(1)]},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        assert response.status_code in (404, 405)
+        assert client.post("/v1/events", json={}, headers=PUBLIC).status_code == 421

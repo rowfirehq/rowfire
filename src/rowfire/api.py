@@ -41,7 +41,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text as sa_text
 from sqlmodel import select
 
-from . import demo_activity, engine, hosted, introspect, sources, supabase, tenancy
+from . import demo_activity, engine, hosted, ingest, introspect, sources, supabase, tenancy
 from .compile import CompileError, compile_trigger
 from .definitions import DefinitionError, Definitions
 from .definitions import loads as loads_definitions
@@ -2266,6 +2266,8 @@ def _is_loopback(host_header: str) -> bool:
 
 
 ALLOWED_HOSTS_ENV = "ROWFIRE_ALLOWED_HOSTS"
+# Serve the ingest server's /v1 routes from this server too (see ingest.py).
+SERVE_INGEST_ENV = "ROWFIRE_SERVE_INGEST"
 
 
 def _allowed_hosts() -> frozenset[str]:
@@ -2396,9 +2398,16 @@ def create_app(session: Session | None = None, dev_origin: str | None = None) ->
     )
 
     allowed_hosts = _allowed_hosts()
+    serve_ingest = os.environ.get(SERVE_INGEST_ENV, "").strip() == "1"
 
     @app.middleware("http")
     async def guard_host(request: Request, call_next):
+        # The /v1 routes are meant to be reached from other machines, and every
+        # request needs an API key, which a page in the user's browser does
+        # not have -- the thing this guard exists to stop. Nothing else is
+        # exempt.
+        if serve_ingest and request.url.path.startswith(ingest.PATH_PREFIX):
+            return await call_next(request)
         if not _host_allowed(request.headers.get("host", ""), allowed_hosts):
             return JSONResponse(
                 status_code=421,
@@ -2410,6 +2419,9 @@ def create_app(session: Session | None = None, dev_origin: str | None = None) ->
         return await call_next(request)
 
     app.include_router(router)
+    if serve_ingest:
+        # Before the UI's catch-all route, which would otherwise answer /v1/*.
+        ingest.install(app)
     # Outside /api, at the exact URL registered on the Supabase OAuth app.
     app.add_api_route(SUPABASE_CALLBACK_PATH, supabase_callback, methods=["GET"])
 

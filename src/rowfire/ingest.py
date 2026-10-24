@@ -2,13 +2,19 @@
 
     rowfire ingest --host 0.0.0.0 --port 8100
 
-A separate server from the UI's, on purpose. The UI's API is a single-user
-tool that refuses any Host header but loopback, so a page the user browses
-cannot drive it (api.py). This one has to be reached by the app's servers over
-the network, so it is authenticated instead: every request carries an API key
+Its own server by default. The UI's API is a single-user tool that refuses
+any Host header but loopback, so a page the user browses cannot drive it
+(api.py). This one has to be reached by the app's servers over the network,
+so it is authenticated instead: every request carries an API key
 (`rowfire platform ingest-key create`), which names the workspace it writes
 to. It serves nothing else -- no UI, no definitions, no credentials -- so
 opening it to the network opens only this.
+
+A deploy that should not run a second service can have the UI's server carry
+these routes as well (ROWFIRE_SERVE_INGEST=1, which `rowfire cloud` sets).
+They are exempt from its loopback check and only from that: a page in the
+user's browser has no API key to send, which is what the check exists to
+stop.
 
     POST /v1/events    a batch of events, stored once each (see events.py)
     POST /v1/catalog   one app process's catalog snapshot
@@ -74,12 +80,12 @@ class _Refused(Exception):
         self.headers = headers or {}
 
 
-def create_ingest_app() -> FastAPI:
-    app = FastAPI(title="Rowfire ingest", docs_url=None, redoc_url=None, openapi_url=None)
+PATH_PREFIX = "/v1/"
 
-    @app.exception_handler(_Refused)
-    async def refused(request: Request, exc: _Refused) -> JSONResponse:
-        return JSONResponse({"detail": exc.detail}, status_code=exc.status, headers=exc.headers)
+
+def create_ingest_app() -> FastAPI:
+    """The ingest server on its own: the /v1 routes and a health check."""
+    app = FastAPI(title="Rowfire ingest", docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.get("/healthz")
     def healthz() -> dict[str, Any]:
@@ -89,6 +95,22 @@ def create_ingest_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001 -- reported, not raised
             raise _Refused(503, f"control plane unavailable: {type(exc).__name__}") from exc
         return {"ok": True}
+
+    install(app)
+    return app
+
+
+def install(app: FastAPI) -> None:
+    """Add the /v1 routes to `app`.
+
+    Used by the ingest server above, and by the UI's server when it is asked
+    to carry them too (ROWFIRE_SERVE_INGEST, see api.py) -- so a deploy that
+    already pays for one web service needs no second one.
+    """
+
+    @app.exception_handler(_Refused)
+    async def refused(request: Request, exc: _Refused) -> JSONResponse:
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status, headers=exc.headers)
 
     @app.post("/v1/events", status_code=202)
     async def receive_events(request: Request) -> dict[str, Any]:
@@ -143,8 +165,6 @@ def create_ingest_app() -> FastAPI:
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers={"ETag": etag})
         return JSONResponse(body, headers={"ETag": etag})
-
-    return app
 
 
 # --------------------------------------------------------------- helpers

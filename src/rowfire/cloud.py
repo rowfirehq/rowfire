@@ -5,9 +5,8 @@ not much else. These commands turn that into everything Rowfire needs, so the
 platform's own config (render.yaml) stays a list of services:
 
     rowfire cloud predeploy   create schemas, migrate, seed the demo's data
-    rowfire cloud serve       the web app, on $PORT
+    rowfire cloud serve       the web app, on $PORT, with the ingest routes (/v1/*)
     rowfire cloud worker      the poller
-    rowfire cloud ingest      where apps running the in-app SDK send events, on $PORT
     rowfire cloud run …       any other rowfire command, with these settings applied
 
 One Postgres database holds everything, a schema each:
@@ -143,6 +142,9 @@ def settings(env: dict[str, str] | None = None) -> dict[str, str]:
         ),
         "ROWFIRE_ALLOWED_HOSTS": ",".join(hosts),
         "ROWFIRE_TRUST_PROXY": "1",
+        # The ingest routes (/v1/*) on the web app itself, rather than as a
+        # service of their own that would cost one more instance.
+        "ROWFIRE_SERVE_INGEST": "1",
         # demo mode
         "ROWFIRE_HOSTED": "1",
         "ROWFIRE_EGRESS": "inbox-only",
@@ -278,18 +280,6 @@ def worker() -> None:
     """The poller, which also deletes idle demo workspaces."""
     _apply()
     os.execvp("rowfire", ["rowfire", "worker", "--interval", "3"])
-
-
-@cloud.command()
-def ingest() -> None:
-    """Where apps running the in-app SDK send events, on the platform's $PORT.
-
-    Its own service, separate from the web app: it is reached by other
-    machines, authenticated by API key, and serves nothing else.
-    """
-    _apply()
-    port = os.environ.get("PORT", "8100")
-    os.execvp("rowfire", ["rowfire", "ingest", "--host", "0.0.0.0", "--port", port])
 
 
 @cloud.command(
