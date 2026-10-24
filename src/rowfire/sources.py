@@ -435,6 +435,11 @@ _TIMEOUT_MESSAGE = (
 #
 # Set ROWFIRE_EVENTS_READER_DSN to a role that may only SELECT from
 # `ingested_event` and the database enforces (2) as well.
+#
+# `ingested_event` is left unqualified: on a cloud deploy the control plane
+# lives in its own schema, reached through the connection's search_path, not
+# in `public`. The temporary view is still found first, because Postgres
+# searches a session's temporary schema before the search_path.
 
 EVENTS_READER_DSN_ENV = "ROWFIRE_EVENTS_READER_DSN"
 
@@ -442,7 +447,7 @@ _EVENTS_VIEW = """
     CREATE TEMPORARY VIEW events AS
     SELECT id AS seq, event_id, subscription, operation, occurred_at, received_at,
            config_version, data
-    FROM public.ingested_event
+    FROM ingested_event
     WHERE workspace_id = {workspace}
 """
 

@@ -19,7 +19,13 @@ from sqlmodel import select
 
 from .platform import actions, crypto, events, scheduler, store
 from .platform.db import PlatformError, get_engine, session_scope
-from .platform.models import DefinitionVersion, Mode, RuleState, TriggerState
+from .platform.models import (
+    DEFAULT_WORKSPACE_ID,
+    DefinitionVersion,
+    Mode,
+    RuleState,
+    TriggerState,
+)
 
 console = Console()
 err_console = Console(stderr=True)
@@ -440,6 +446,106 @@ def ingest_key_revoke(prefix: str) -> None:
     except events.EventsError as exc:
         _fail("cannot revoke", [str(exc)])
     console.print(f"\n[green]✓[/green] revoked {prefix}…\n")
+
+
+@platform.group(name="events")
+def events_group() -> None:
+    """What apps running the in-app SDK sent: events, catalog, losses."""
+
+
+@events_group.command(name="recent")
+@click.option("--subscription", default=None, help="Only this subscription's events.")
+@click.option("--limit", default=20, show_default=True, type=int)
+@click.option("--json", "as_json", is_flag=True, help="Print the events as JSON lines.")
+def events_recent(subscription: str | None, limit: int, as_json: bool) -> None:
+    """The newest events received, newest first."""
+    import json
+
+    with session_scope() as session:
+        rows = events.recent_events(
+            session, workspace_id=DEFAULT_WORKSPACE_ID, subscription=subscription, limit=limit
+        )
+        total = events.count_events(session, workspace_id=DEFAULT_WORKSPACE_ID)
+        if as_json:
+            for row in rows:
+                click.echo(
+                    json.dumps(
+                        {
+                            "event_id": row.event_id,
+                            "subscription": row.subscription,
+                            "operation": row.operation,
+                            "occurred_at": row.occurred_at,
+                            "received_at": row.received_at,
+                            "data": row.data,
+                        },
+                        default=str,
+                    )
+                )
+            return
+        table = Table(show_header=True, header_style="bold")
+        for column in ("received", "subscription", "operation", "data"):
+            table.add_column(column, overflow="fold")
+        for row in rows:
+            table.add_row(
+                row.received_at.strftime("%Y-%m-%d %H:%M:%S"),
+                row.subscription,
+                row.operation or "",
+                json.dumps(row.data, default=str),
+            )
+    console.print(table if rows else "\nNo events received yet.\n")
+    console.print(f"  {total} event(s) stored in all\n", style="dim")
+
+
+@events_group.command(name="catalog")
+@click.option("--json", "as_json", is_flag=True, help="Print the whole catalog as JSON.")
+def events_catalog(as_json: bool) -> None:
+    """Operations, writes and values the apps reported, added up."""
+    import json
+
+    with session_scope() as session:
+        merged = events.merged_catalog(session, workspace_id=DEFAULT_WORKSPACE_ID)
+    if as_json:
+        click.echo(json.dumps(merged, indent=2, default=str))
+        return
+    if not merged["operations"] and not merged["tables"]:
+        console.print("\nNo catalog received yet.\n")
+        return
+    console.print(f"\n[bold]operations[/bold]  [dim]from {merged['instances']} process(es)[/dim]")
+    for name, op in sorted(merged["operations"].items()):
+        console.print(f"  {name}  [dim]called {op['seen']}, errors {op['errors']}[/dim]")
+        for write in op["writes"]:
+            changed = ", ".join(sorted(write["changed"])) or "-"
+            what = f"{write['kind']} {write['table']} x{write['seen']}"
+            console.print(f"    {what}  [dim]changing {changed}[/dim]")
+    console.print("\n[bold]tables[/bold]")
+    for name, table in sorted(merged["tables"].items()):
+        console.print(f"  {name}")
+        for column, info in table["columns"].items():
+            if info.get("many_values"):
+                observed = "many values"
+            else:
+                observed = ", ".join(
+                    f"{v['value']} ({v['seen']})" for v in info.get("values", [])[:8]
+                )
+            console.print(f"    {column}  [dim]{info.get('type', '?')}[/dim]  {observed}")
+    console.print()
+
+
+@events_group.command(name="losses")
+@click.option("--days", default=7, show_default=True, type=int)
+def events_losses(days: int) -> None:
+    """Events the SDKs reported they could not deliver, by day and reason."""
+    with session_scope() as session:
+        rows = events.losses(session, workspace_id=DEFAULT_WORKSPACE_ID, days=days)
+    if not rows:
+        console.print(f"\nNo losses reported in the last {days} day(s).\n")
+        return
+    table = Table(show_header=True, header_style="bold")
+    for column in ("day", "reason", "events"):
+        table.add_column(column)
+    for row in rows:
+        table.add_row(row["day"], row["reason"], str(row["count"]))
+    console.print(table)
 
 
 @platform.command(name="prune-events")

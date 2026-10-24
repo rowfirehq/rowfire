@@ -499,3 +499,90 @@ def test_the_ui_adds_an_events_source_and_shows_what_arrived(ui, session) -> Non
     recent = ui.get("/api/app-events/recent").json()
     assert recent["total"] == 2
     assert [e["data"]["row.id"] for e in recent["events"]] == [2, 1]
+
+
+def test_the_app_events_endpoints_do_not_exist_in_the_hosted_demo(ui, monkeypatch) -> None:
+    from rowfire import hosted
+
+    monkeypatch.setattr(hosted, "enabled", lambda: True)
+    for path in ("/api/app-events/catalog", "/api/app-events/recent", "/api/app-events/keys"):
+        assert ui.get(path).status_code in (401, 404), path
+    created = ui.post("/api/app-events/keys", json={"name": "visitor"})
+    assert created.status_code in (401, 403, 404)
+
+
+def test_the_events_source_follows_the_control_planes_search_path(session, monkeypatch) -> None:
+    # On a cloud deploy the control plane lives in its own schema, not public.
+    session.execute(text("DROP SCHEMA IF EXISTS elsewhere CASCADE"))
+    session.execute(text("CREATE SCHEMA elsewhere"))
+    session.execute(
+        text("CREATE TABLE elsewhere.ingested_event (LIKE public.ingested_event INCLUDING ALL)")
+    )
+    session.execute(
+        text(
+            "INSERT INTO elsewhere.ingested_event (workspace_id, event_id, subscription, data) "
+            "VALUES (:ws, 'elsewhere0000001', 'from_elsewhere', '{}')"
+        ),
+        {"ws": DEFAULT_WORKSPACE_ID},
+    )
+    session.commit()
+    try:
+        base = PLATFORM_DSN.replace("postgresql+psycopg://", "postgresql://")
+        monkeypatch.setenv(
+            sources.EVENTS_READER_DSN_ENV, f"{base}?options=-csearch_path%3Delsewhere"
+        )
+        dsn = sources.pin_workspace(sources.EVENTS_DSN, DEFAULT_WORKSPACE_ID)
+        with sources.connect(dsn) as conn:
+            rows, _ = conn.fetch("SELECT subscription FROM events")
+        assert rows == [{"subscription": "from_elsewhere"}]
+    finally:
+        session.execute(text("DROP SCHEMA elsewhere CASCADE"))
+        session.commit()
+
+
+# ------------------------------------------------------------------ CLI
+
+
+def test_the_cli_shows_what_arrived(session) -> None:
+    from click.testing import CliRunner
+
+    from rowfire.cli import cli
+
+    _store(session, DEFAULT_WORKSPACE_ID, 1, 2)
+    event_store.save_catalog(session, _catalog("web-1", 3), workspace_id=DEFAULT_WORKSPACE_ID)
+    event_store.record_losses(session, {"queue_overflow": 4}, workspace_id=DEFAULT_WORKSPACE_ID)
+    session.commit()
+    runner = CliRunner()
+
+    recent = runner.invoke(cli, ["platform", "events", "recent", "--json"])
+    assert recent.exit_code == 0, recent.output
+    lines = [json.loads(line) for line in recent.output.splitlines()]
+    assert [line["data"]["row.id"] for line in lines] == [2, 1]
+
+    table = runner.invoke(cli, ["platform", "events", "recent"])
+    assert "goodwill_refund" in table.output and "2 event(s) stored" in table.output
+
+    catalog = runner.invoke(cli, ["platform", "events", "catalog"])
+    assert "POST /checkout" in catalog.output and "insert charges x3" in catalog.output
+    merged = json.loads(runner.invoke(cli, ["platform", "events", "catalog", "--json"]).output)
+    assert merged["operations"]["POST /checkout"]["seen"] == 3
+
+    losses = runner.invoke(cli, ["platform", "events", "losses"])
+    assert "queue_overflow" in losses.output and "4" in losses.output
+
+
+def test_the_cli_creates_lists_and_revokes_keys(session) -> None:
+    from click.testing import CliRunner
+
+    from rowfire.cli import cli
+
+    runner = CliRunner()
+    created = runner.invoke(cli, ["platform", "ingest-key", "create", "--name", "web"])
+    assert created.exit_code == 0, created.output
+    [key] = event_store.list_keys(session)
+    assert key.key_prefix in created.output
+
+    revoked = runner.invoke(cli, ["platform", "ingest-key", "revoke", key.key_prefix])
+    assert revoked.exit_code == 0, revoked.output
+    listing = runner.invoke(cli, ["platform", "ingest-key", "list"])
+    assert "revoked" in listing.output

@@ -7,6 +7,8 @@ platform's own config (render.yaml) stays a list of services:
     rowfire cloud predeploy   create schemas, migrate, seed the demo's data
     rowfire cloud serve       the web app, on $PORT
     rowfire cloud worker      the poller
+    rowfire cloud ingest      where apps running the in-app SDK send events, on $PORT
+    rowfire cloud run …       any other rowfire command, with these settings applied
 
 One Postgres database holds everything, a schema each:
 
@@ -276,6 +278,34 @@ def worker() -> None:
     """The poller, which also deletes idle demo workspaces."""
     _apply()
     os.execvp("rowfire", ["rowfire", "worker", "--interval", "3"])
+
+
+@cloud.command()
+def ingest() -> None:
+    """Where apps running the in-app SDK send events, on the platform's $PORT.
+
+    Its own service, separate from the web app: it is reached by other
+    machines, authenticated by API key, and serves nothing else.
+    """
+    _apply()
+    port = os.environ.get("PORT", "8100")
+    os.execvp("rowfire", ["rowfire", "ingest", "--host", "0.0.0.0", "--port", port])
+
+
+@cloud.command(
+    name="run",
+    context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},
+)
+@click.argument("args", nargs=-1, required=True, type=click.UNPROCESSED)
+def run(args: tuple[str, ...]) -> None:
+    """Run another rowfire command with this deploy's settings, from the
+    platform's shell. For example:
+
+        rowfire cloud run platform ingest-key create --name web
+        rowfire cloud run platform events recent
+    """
+    _apply()
+    os.execvp("rowfire", ["rowfire", *args])
 
 
 @cloud.command(name="reader-password")

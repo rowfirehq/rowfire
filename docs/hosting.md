@@ -61,6 +61,7 @@ timestamps stay recent. Visitors' workspaces survive deploys.
 | --- | --- | --- |
 | web app (`rowfire-demo`) | Starter | $7/month |
 | worker (`rowfire-demo-worker`) | Starter | $7/month |
+| ingest (`rowfire-ingest`), for pushed events | Starter | $7/month |
 | Postgres (`rowfire-db`) | Basic 256 MB, 1 GB disk | about $6.30/month |
 
 The database holds everything, a schema each: `rowfire_platform` for Rowfire
@@ -102,6 +103,38 @@ visitor shares it, read-only, as they share the MySQL support desk.
 
 Without both settings the demo has no Supabase source, and the Supabase
 trigger and rule are left out of each visitor's sample.
+
+**Pushed events (not shown to visitors).** `rowfire-ingest` is where apps
+running the in-app SDK ([`sdk/python`](../sdk/python)) send events, for
+trying the SDK against real apps. Nothing about it appears in the demo:
+visitors cannot make keys, and the `/api/app-events` routes do not exist on a
+hosted instance. Everything goes through a shell, on the worker's **Shell**
+tab:
+
+```bash
+rowfire cloud run platform ingest-key create --name my-app   # shown once
+rowfire cloud run platform ingest-key list
+rowfire cloud run platform events recent            # --subscription, --json
+rowfire cloud run platform events catalog           # --json for all of it
+rowfire cloud run platform events losses
+```
+
+Point the SDK at the service's address with that key:
+
+```python
+rowfire.init(
+    endpoint="https://rowfire-ingest.onrender.com",
+    api_key=os.environ["ROWFIRE_API_KEY"],
+    subscriptions=[...],  # or leave out, and push them as definitions
+)
+```
+
+With `subscriptions` given in code, the SDK sends what they match and never
+asks for config. Left out, it fetches them from `/v1/config`, which serves
+the `subscriptions:` of the definitions in Rowfire's default workspace
+(`rowfire cloud run platform push -f <file>`). The catalog is sent either
+way. Events older than `ROWFIRE_EVENT_RETENTION_DAYS` (30) are pruned by the
+worker; the 1 GB disk is the limit to watch.
 
 **If a deploy fails,** the web service's **Events** tab shows which step.
 `rowfire cloud predeploy` names what it could not do. The likeliest is the
