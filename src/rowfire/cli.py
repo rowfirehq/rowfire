@@ -409,6 +409,31 @@ def serve(
     uvicorn.run(app, host=host, port=port, log_level="warning")
 
 
+@cli.command()
+@click.option("--host", default="0.0.0.0", show_default=True)
+@click.option("--port", default=8100, show_default=True, type=int)
+def ingest(host: str, port: int) -> None:
+    """Receive events from apps running the in-app SDK.
+
+    Unlike `serve`, this is meant to be reached over the network: every request
+    needs an API key (`rowfire platform ingest-key create`), and it serves
+    nothing but /v1/events, /v1/catalog and /v1/config. Put TLS in front of it.
+    """
+    import uvicorn
+
+    from .ingest import create_ingest_app
+    from .platform.db import PlatformError, check_ready
+
+    try:
+        check_ready()
+    except PlatformError as exc:
+        _fail("cannot start without a control plane", [str(exc)])
+
+    console.print(f"\n[green]▸[/green] rowfire ingest on [bold]http://{host}:{port}[/bold]")
+    console.print("  POST /v1/events · POST /v1/catalog · GET /v1/config\n", style="dim")
+    uvicorn.run(create_ingest_app(), host=host, port=port, log_level="warning")
+
+
 def _register_platform_commands() -> None:
     """Attach the control-plane commands."""
     from .platform_cli import platform, worker

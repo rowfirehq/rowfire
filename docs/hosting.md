@@ -103,6 +103,40 @@ visitor shares it, read-only, as they share the MySQL support desk.
 Without both settings the demo has no Supabase source, and the Supabase
 trigger and rule are left out of each visitor's sample.
 
+**Pushed events (not shown to visitors).** The web service also answers
+`/v1/events`, `/v1/catalog` and `/v1/config`, where apps running the in-app
+SDK ([rowfire-sdk-python](https://github.com/rowfirehq/rowfire-sdk-python)) send events, for trying the SDK against
+real apps. It costs nothing extra: no second service, the same database.
+Every one of those requests needs an API key, and nothing about them appears
+in the demo: visitors cannot make keys, and the `/api/app-events` routes do
+not exist on a hosted instance. Everything goes through a shell, on the
+worker's **Shell** tab:
+
+```bash
+rowfire cloud run platform ingest-key create --name my-app   # shown once
+rowfire cloud run platform ingest-key list
+rowfire cloud run platform events recent            # --subscription, --json
+rowfire cloud run platform events catalog           # --json for all of it
+rowfire cloud run platform events losses
+```
+
+Point the SDK at the service's address with that key:
+
+```python
+rowfire.init(
+    endpoint="https://rowfire-demo.onrender.com",  # or the custom domain
+    api_key=os.environ["ROWFIRE_API_KEY"],
+    subscriptions=[...],  # or leave out, and push them as definitions
+)
+```
+
+With `subscriptions` given in code, the SDK sends what they match and never
+asks for config. Left out, it fetches them from `/v1/config`, which serves
+the `subscriptions:` of the definitions in Rowfire's default workspace
+(`rowfire cloud run platform push -f <file>`). The catalog is sent either
+way. Events older than `ROWFIRE_EVENT_RETENTION_DAYS` (30) are pruned by the
+worker; the 1 GB disk is the limit to watch.
+
 **If a deploy fails,** the web service's **Events** tab shows which step.
 `rowfire cloud predeploy` names what it could not do. The likeliest is the
 database user lacking `CREATEROLE`, which the demo needs for the read-only

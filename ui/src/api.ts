@@ -9,7 +9,7 @@
 // and mode hangs off the rule.
 
 /** The database engines a data source can be. */
-export type SourceKind = "postgres" | "mysql" | "supabase";
+export type SourceKind = "postgres" | "mysql" | "supabase" | "events";
 
 /** One Supabase project an OAuth grant can read. */
 export interface SupabaseProject {

@@ -1,6 +1,7 @@
 """Pydantic models for definitions.yaml, plus loading and validation.
 
-Two concepts, deliberately separate:
+Two concepts, deliberately separate (and a third, `subscriptions`, for apps
+that push events with the in-app SDK rather than being read):
 
   Trigger   a SQL query that returns the rows an event happened on, plus the
             column that places each row in time and the columns that identify
@@ -134,6 +135,71 @@ class Rule(BaseModel):
         return self
 
 
+WriteKind = Literal["insert", "update", "delete"]
+
+# Where a subscription's field paths read from, as the SDK resolves them.
+_PATH_NAMESPACES = ("row", "old", "actor", "params")
+_SCALAR_PATHS = ("operation", "response.status")
+
+
+class SubscriptionWrite(BaseModel):
+    """The table write inside an operation that a subscription listens for."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    table: str = Field(min_length=1)
+    kind: list[WriteKind] = Field(default_factory=lambda: ["insert", "update", "delete"])
+    # A column this write must have changed, for "status changed to refunded".
+    changed: str | None = None
+
+
+class Subscription(BaseModel):
+    """What an app's SDK should send: an operation, optionally a table write
+    in it, the conditions that must hold, and the fields to carry.
+
+    Matched inside the app (rowfirehq/rowfire-sdk-python), which fetches these from
+    `GET /v1/config` on the ingest server. A trigger then reads the events
+    that arrive, from an `rowfire://events` source.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    description: str | None = None
+    # An operation name or glob: "POST /admin/charges/{id}/refund", "job *".
+    operation: str = Field(min_length=1)
+    # `write` rather than `on`: YAML 1.1 reads a bare `on:` key as `true`.
+    write: SubscriptionWrite | None = None
+    # Path -> value, or a list meaning any of.
+    where: dict[str, Any] = Field(default_factory=dict)
+    fields: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _paths_resolve(self) -> Subscription:
+        for path in [*self.where, *self.fields]:
+            if path in _SCALAR_PATHS:
+                continue
+            namespace, _, rest = path.partition(".")
+            if namespace not in _PATH_NAMESPACES or not rest:
+                raise ValueError(
+                    f"unknown field `{path}`; use row.<column>, old.<column>, "
+                    f"actor.<attr>, params.<name>, operation or response.status"
+                )
+            if namespace in ("row", "old") and self.write is None:
+                raise ValueError(f"`{path}` needs `write:` to name the table it reads")
+        return self
+
+    def for_sdk(self, name: str) -> dict[str, Any]:
+        """The shape the SDK's matcher reads."""
+        out: dict[str, Any] = {"id": name, "operation": self.operation}
+        if self.write is not None:
+            out["write"] = self.write.model_dump(exclude_none=True)
+        if self.where:
+            out["where"] = self.where
+        if self.fields:
+            out["fields"] = self.fields
+        return out
+
+
 class Source(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -157,6 +223,9 @@ class Definitions(BaseModel):
     source: Source = Field(default_factory=Source)
     triggers: dict[str, Trigger] = Field(default_factory=dict)
     rules: dict[str, Rule] = Field(default_factory=dict)
+    # What apps running the in-app SDK should send. Served to them by the
+    # ingest server; the events they produce are read by triggers like rows.
+    subscriptions: dict[str, Subscription] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _cross_references_resolve(self) -> Definitions:

@@ -5,8 +5,9 @@ not much else. These commands turn that into everything Rowfire needs, so the
 platform's own config (render.yaml) stays a list of services:
 
     rowfire cloud predeploy   create schemas, migrate, seed the demo's data
-    rowfire cloud serve       the web app, on $PORT
+    rowfire cloud serve       the web app, on $PORT, with the ingest routes (/v1/*)
     rowfire cloud worker      the poller
+    rowfire cloud run …       any other rowfire command, with these settings applied
 
 One Postgres database holds everything, a schema each:
 
@@ -141,6 +142,9 @@ def settings(env: dict[str, str] | None = None) -> dict[str, str]:
         ),
         "ROWFIRE_ALLOWED_HOSTS": ",".join(hosts),
         "ROWFIRE_TRUST_PROXY": "1",
+        # The ingest routes (/v1/*) on the web app itself, rather than as a
+        # service of their own that would cost one more instance.
+        "ROWFIRE_SERVE_INGEST": "1",
         # demo mode
         "ROWFIRE_HOSTED": "1",
         "ROWFIRE_EGRESS": "inbox-only",
@@ -276,6 +280,22 @@ def worker() -> None:
     """The poller, which also deletes idle demo workspaces."""
     _apply()
     os.execvp("rowfire", ["rowfire", "worker", "--interval", "3"])
+
+
+@cloud.command(
+    name="run",
+    context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},
+)
+@click.argument("args", nargs=-1, required=True, type=click.UNPROCESSED)
+def run(args: tuple[str, ...]) -> None:
+    """Run another rowfire command with this deploy's settings, from the
+    platform's shell. For example:
+
+        rowfire cloud run platform ingest-key create --name web
+        rowfire cloud run platform events recent
+    """
+    _apply()
+    os.execvp("rowfire", ["rowfire", *args])
 
 
 @cloud.command(name="reader-password")

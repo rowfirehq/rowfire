@@ -36,6 +36,8 @@ dev = [
     "httpx>=0.28.1",
     "pytest>=8.3",
     "ruff>=0.7",
+    # The in-app SDK, for the end-to-end ingest test (tests/test_ingest.py).
+    "rowfire-sdk @ git+https://github.com/rowfirehq/rowfire-sdk-python",
 ]
 
 [build-system]

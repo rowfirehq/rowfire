@@ -120,5 +120,6 @@ export function engineLabel(kind: string | null | undefined): string {
   if (kind === "postgres") return "PostgreSQL";
   if (kind === "mysql") return "MySQL";
   if (kind === "supabase") return "Supabase";
+  if (kind === "events") return "App events";
   return "Unknown";
 }

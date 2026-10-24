@@ -448,6 +448,7 @@ stored encrypted. There can be any number, on any of these:
 | PostgreSQL | `postgresql://user:pass@host:5432/db` | psycopg |
 | MySQL (and MariaDB) | `mysql://user:pass@host:3306/db` | PyMySQL |
 | Supabase | `supabase://<project ref>` | Supabase's Management API |
+| App events | `rowfire://events` | events pushed by the in-app SDK ([below](#pushed-events-no-database-login)) |
 
 The scheme picks the engine; nothing else needs to say which it is. Add sources
 under **Data sources** in the UI, or from the CLI:
@@ -540,6 +541,81 @@ they do on Postgres; the SQL is Postgres SQL.
   `SUPABASE_ACCESS_TOKEN` in `.env` and **Data sources** offers it in one
   click; the hosted demo gives it to every visitor (see
   [docs/hosting.md](docs/hosting.md)).
+
+## Pushed events: no database login
+
+For a team that will not grant a database login at all, an app can push its
+events instead, with the in-app SDK, [rowfire-sdk-python](https://github.com/rowfirehq/rowfire-sdk-python) (MIT). Installed
+once, it tags each ORM write with the operation that caused it (a route, a
+job), matches the subscriptions in your definitions inside the app, and sends
+only what matches, with only the fields named. Rowfire never connects to the
+app's database.
+
+```yaml
+subscriptions:
+  goodwill_refund:
+    operation: POST /admin/charges/{id}/refund
+    write: {table: charges, kind: [update], changed: status}
+    where: {row.status: refunded, actor.role: support}
+    fields: [row.id, row.amount, old.status, actor.id]
+
+triggers:
+  goodwill_refund:
+    source: app_events            # a source with the DSN rowfire://events
+    sql: |
+      SELECT event_id, received_at, occurred_at,
+             data->>'row.id' AS charge_id, data->>'actor.id' AS agent
+      FROM events
+      WHERE subscription = 'goodwill_refund'
+    event_time: received_at
+    key: [charge_id]
+```
+
+A subscription says what the app sends; a trigger reads what arrived, as rows
+of a table called `events`, and from there everything is the same: rules,
+cadence, the fire ledger, shadow mode, actions, backtests. (`write:` rather
+than `on:`, because YAML reads a bare `on:` key as `true`.)
+
+**The pieces.**
+
+- `rowfire ingest` is a separate server from `rowfire serve`, meant to be
+  reached by the app's servers over the network. Every request carries an API
+  key (`rowfire platform ingest-key create --name web`; only a hash is
+  stored), which names the workspace it writes to. It serves only
+  `POST /v1/events`, `POST /v1/catalog` and `GET /v1/config`, so opening it to
+  the network opens nothing else. Put TLS in front of it.
+- Events land in `ingested_event` in the control plane, stored once each: the
+  SDK's event id is unique per workspace, so a batch resent after a timeout
+  inserts nothing.
+- `GET /v1/config` serves the `subscriptions` in the active definitions, with
+  an ETag, so an app picks up a new one within its next poll (30 s) and an
+  unchanged set costs one empty response.
+- `POST /v1/catalog` keeps each app process's latest catalog (operations,
+  tables, columns, values seen). `GET /api/app-events/catalog` adds them up for
+  the dashboard; `/api/app-events/recent` and `/losses` show what arrived and
+  what an SDK reported it could not deliver.
+
+**Poll on `received_at`.** It is set by the database when the batch is stored,
+so an event that arrives hours late after an outage still lands in the next
+poll's window. `occurred_at` (the app's clock) would fall behind the watermark
+and be missed. It stays in the row for queries that need business time.
+
+**What a trigger over `events` can read.** The table sits next to stored
+credentials, so a `rowfire://events` source is fenced three ways: each
+connection sees a temporary view of its own workspace's rows only (the
+workspace comes from the stored connection, never from the DSN); every query
+is parsed first and refused if it names any table but `events` or its own
+`WITH` blocks, or calls a function that reads files or runs SQL given as text
+(`pg_*`, `query_to_xml`, `dblink`, ...); and the session is read-only. For
+the database to enforce the table boundary too, set
+`ROWFIRE_EVENTS_READER_DSN` to a role that may only `SELECT` from
+`ingested_event`.
+
+**Retention.** Events are kept until pruned: `rowfire platform prune-events
+--days 30`, or set `ROWFIRE_EVENT_RETENTION_DAYS` and the worker prunes hourly.
+The table is not partitioned yet; when volume calls for it, partition on
+`occurred_at` (a retry repeats it, so the duplicate guard survives), not
+`received_at`.
 
 ## The control plane
 
@@ -789,6 +865,9 @@ Every command reads what is in force from the control plane. There is no
 | `rowfire platform promote/demote <rule>` | Move one rule between shadow and live |
 | `rowfire platform halt <reason>` / `resume` | The kill switch |
 | `rowfire worker` | Run the poller |
+| `rowfire ingest` | Receive events pushed by the in-app SDK (network-facing, key-authenticated) |
+| `rowfire platform ingest-key create/list/revoke` | API keys apps push events with. `--name` |
+| `rowfire platform prune-events --days N` | Delete pushed events older than N days |
 
 ## What the number means, and what it does not
 

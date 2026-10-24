@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from datetime import timedelta
 from pathlib import Path
 
 import click
@@ -16,9 +17,15 @@ from rich.console import Console
 from rich.table import Table
 from sqlmodel import select
 
-from .platform import actions, crypto, scheduler, store
+from .platform import actions, crypto, events, scheduler, store
 from .platform.db import PlatformError, get_engine, session_scope
-from .platform.models import DefinitionVersion, Mode, RuleState, TriggerState
+from .platform.models import (
+    DEFAULT_WORKSPACE_ID,
+    DefinitionVersion,
+    Mode,
+    RuleState,
+    TriggerState,
+)
 
 console = Console()
 err_console = Console(stderr=True)
@@ -324,6 +331,11 @@ def worker(interval: float, once: bool, max_ticks: int) -> None:
 
     reap_every = 600.0
     last_reap = 0.0
+    # Pushed events are kept until pruned. With ROWFIRE_EVENT_RETENTION_DAYS
+    # set, the worker prunes them hourly; unset, nothing is deleted.
+    retention = _retention_days()
+    prune_every = 3600.0
+    last_prune = 0.0
 
     ticks = 0
     while True:
@@ -337,6 +349,16 @@ def worker(interval: float, once: bool, max_ticks: int) -> None:
                     console.print(f"[dim]reaped {reaped} idle visitor workspace(s)[/dim]")
             except Exception as exc:  # noqa: BLE001 -- the worker must keep polling
                 console.print(f"[red]reap failed[/red] — {str(exc)[:200]}")
+
+        if retention and time.monotonic() - last_prune > prune_every:
+            last_prune = time.monotonic()
+            try:
+                with session_scope(engine) as session:
+                    pruned = events.prune(session, timedelta(days=retention))
+                if pruned:
+                    console.print(f"[dim]pruned {pruned} event(s) older than {retention}d[/dim]")
+            except Exception as exc:  # noqa: BLE001 -- the worker must keep polling
+                console.print(f"[red]prune failed[/red] — {str(exc)[:200]}")
 
         with session_scope(engine) as session:
             # Every workspace: one on a local install, one per visitor on a
@@ -353,6 +375,189 @@ def worker(interval: float, once: bool, max_ticks: int) -> None:
             break
         if outcome is None:
             time.sleep(interval)
+
+
+RETENTION_ENV = "ROWFIRE_EVENT_RETENTION_DAYS"
+
+
+def _retention_days() -> int | None:
+    raw = os.environ.get(RETENTION_ENV, "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or int(raw) < 1:
+        _fail("worker cannot start", [f"{RETENTION_ENV} must be a whole number of days"])
+    return int(raw)
+
+
+# ------------------------------------------------------------ pushed events
+
+
+@platform.group(name="ingest-key")
+def ingest_key() -> None:
+    """API keys that apps running the in-app SDK send events with."""
+
+
+@ingest_key.command(name="create")
+@click.option("--name", required=True, help="Which app or environment this key is for.")
+def ingest_key_create(name: str) -> None:
+    """Create a key. It is shown once; only a hash is stored."""
+    try:
+        with session_scope() as session:
+            key, secret = events.create_key(session, name)
+            prefix = key.key_prefix
+    except PlatformError as exc:
+        _fail("cannot create a key", [str(exc)])
+    console.print(f"\n[green]✓[/green] key [bold]{prefix}…[/bold] for {name}\n")
+    console.print(f"  {secret}\n")
+    console.print(
+        "  Set it as the SDK's api_key. It is not shown again; revoke it with\n"
+        f"  `rowfire platform ingest-key revoke {prefix}` if it leaks.\n",
+        style="dim",
+    )
+
+
+@ingest_key.command(name="list")
+def ingest_key_list() -> None:
+    """Keys and when each was last used. Never the keys themselves."""
+    with session_scope() as session:
+        keys = events.list_keys(session)
+        table = Table(show_header=True, header_style="bold")
+        for column in ("prefix", "name", "created", "last used", "status"):
+            table.add_column(column)
+        for key in keys:
+            table.add_row(
+                f"{key.key_prefix}…",
+                key.name,
+                key.created_at.strftime("%Y-%m-%d"),
+                key.last_used_at.strftime("%Y-%m-%d %H:%M") if key.last_used_at else "never",
+                "revoked" if key.revoked_at else "active",
+            )
+    console.print(table if keys else "\nNo keys yet. `rowfire platform ingest-key create`.\n")
+
+
+@ingest_key.command(name="revoke")
+@click.argument("prefix")
+def ingest_key_revoke(prefix: str) -> None:
+    """Revoke a key by its prefix. Apps using it are refused from now on."""
+    prefix = prefix.rstrip("…")
+    try:
+        with session_scope() as session:
+            events.revoke_key(session, prefix)
+    except events.EventsError as exc:
+        _fail("cannot revoke", [str(exc)])
+    console.print(f"\n[green]✓[/green] revoked {prefix}…\n")
+
+
+@platform.group(name="events")
+def events_group() -> None:
+    """What apps running the in-app SDK sent: events, catalog, losses."""
+
+
+@events_group.command(name="recent")
+@click.option("--subscription", default=None, help="Only this subscription's events.")
+@click.option("--limit", default=20, show_default=True, type=int)
+@click.option("--json", "as_json", is_flag=True, help="Print the events as JSON lines.")
+def events_recent(subscription: str | None, limit: int, as_json: bool) -> None:
+    """The newest events received, newest first."""
+    import json
+
+    with session_scope() as session:
+        rows = events.recent_events(
+            session, workspace_id=DEFAULT_WORKSPACE_ID, subscription=subscription, limit=limit
+        )
+        total = events.count_events(session, workspace_id=DEFAULT_WORKSPACE_ID)
+        if as_json:
+            for row in rows:
+                click.echo(
+                    json.dumps(
+                        {
+                            "event_id": row.event_id,
+                            "subscription": row.subscription,
+                            "operation": row.operation,
+                            "occurred_at": row.occurred_at,
+                            "received_at": row.received_at,
+                            "data": row.data,
+                        },
+                        default=str,
+                    )
+                )
+            return
+        table = Table(show_header=True, header_style="bold")
+        for column in ("received", "subscription", "operation", "data"):
+            table.add_column(column, overflow="fold")
+        for row in rows:
+            table.add_row(
+                row.received_at.strftime("%Y-%m-%d %H:%M:%S"),
+                row.subscription,
+                row.operation or "",
+                json.dumps(row.data, default=str),
+            )
+    console.print(table if rows else "\nNo events received yet.\n")
+    console.print(f"  {total} event(s) stored in all\n", style="dim")
+
+
+@events_group.command(name="catalog")
+@click.option("--json", "as_json", is_flag=True, help="Print the whole catalog as JSON.")
+def events_catalog(as_json: bool) -> None:
+    """Operations, writes and values the apps reported, added up."""
+    import json
+
+    with session_scope() as session:
+        merged = events.merged_catalog(session, workspace_id=DEFAULT_WORKSPACE_ID)
+    if as_json:
+        click.echo(json.dumps(merged, indent=2, default=str))
+        return
+    if not merged["operations"] and not merged["tables"]:
+        console.print("\nNo catalog received yet.\n")
+        return
+    console.print(f"\n[bold]operations[/bold]  [dim]from {merged['instances']} process(es)[/dim]")
+    for name, op in sorted(merged["operations"].items()):
+        console.print(f"  {name}  [dim]called {op['seen']}, errors {op['errors']}[/dim]")
+        for write in op["writes"]:
+            changed = ", ".join(sorted(write["changed"])) or "-"
+            what = f"{write['kind']} {write['table']} x{write['seen']}"
+            console.print(f"    {what}  [dim]changing {changed}[/dim]")
+    console.print("\n[bold]tables[/bold]")
+    for name, table in sorted(merged["tables"].items()):
+        console.print(f"  {name}")
+        for column, info in table["columns"].items():
+            if info.get("many_values"):
+                observed = "many values"
+            else:
+                observed = ", ".join(
+                    f"{v['value']} ({v['seen']})" for v in info.get("values", [])[:8]
+                )
+            console.print(f"    {column}  [dim]{info.get('type', '?')}[/dim]  {observed}")
+    console.print()
+
+
+@events_group.command(name="losses")
+@click.option("--days", default=7, show_default=True, type=int)
+def events_losses(days: int) -> None:
+    """Events the SDKs reported they could not deliver, by day and reason."""
+    with session_scope() as session:
+        rows = events.losses(session, workspace_id=DEFAULT_WORKSPACE_ID, days=days)
+    if not rows:
+        console.print(f"\nNo losses reported in the last {days} day(s).\n")
+        return
+    table = Table(show_header=True, header_style="bold")
+    for column in ("day", "reason", "events"):
+        table.add_column(column)
+    for row in rows:
+        table.add_row(row["day"], row["reason"], str(row["count"]))
+    console.print(table)
+
+
+@platform.command(name="prune-events")
+@click.option("--days", type=int, required=True, help="Delete events received before this.")
+def prune_events(days: int) -> None:
+    """Delete pushed events older than --days. The worker can do this hourly
+    instead (ROWFIRE_EVENT_RETENTION_DAYS)."""
+    if days < 1:
+        _fail("cannot prune", ["--days must be at least 1"])
+    with session_scope() as session:
+        pruned = events.prune(session, timedelta(days=days))
+    console.print(f"\n[green]✓[/green] pruned {pruned} event(s)\n")
 
 
 def _report(outcome: scheduler.PollOutcome) -> None:

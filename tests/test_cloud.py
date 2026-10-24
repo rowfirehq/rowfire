@@ -78,3 +78,39 @@ def test_a_doubled_entrypoint_still_runs_the_command() -> None:
     assert "predeploy" in result.output
     # And it does not clutter the real help.
     assert "rowfire " not in CliRunner().invoke(cli, ["--help"]).output.split("Commands:")[1]
+
+
+def _captured_exec(monkeypatch) -> tuple[list[list[str]], dict[str, str]]:
+    """The commands `rowfire cloud` would exec, and the environment it set.
+
+    The environment is a private copy: `rowfire cloud` writes its derived
+    settings into it (ROWFIRE_HOSTED among them), which must not leak into
+    the tests that run after this one.
+    """
+    import os
+
+    calls: list[list[str]] = []
+    environ = {**os.environ, **RENDER}
+    monkeypatch.setattr(cloud.os, "environ", environ)
+    monkeypatch.setattr(cloud.os, "execvp", lambda file, argv: calls.append(list(argv)))
+    return calls, environ
+
+
+def test_the_web_app_carries_the_ingest_routes() -> None:
+    # No second service to pay for: the web app answers /v1/* itself.
+    assert cloud.settings(RENDER)["ROWFIRE_SERVE_INGEST"] == "1"
+
+
+def test_run_passes_any_command_through_with_the_deploys_settings(monkeypatch) -> None:
+    from click.testing import CliRunner
+
+    calls, environ = _captured_exec(monkeypatch)
+    environ.pop("ROWFIRE_PLATFORM_DSN", None)
+    result = CliRunner().invoke(
+        cloud.cloud, ["run", "platform", "ingest-key", "create", "--name", "web"]
+    )
+    assert result.exit_code == 0, result.output
+    assert calls == [["rowfire", "platform", "ingest-key", "create", "--name", "web"]]
+    platform = urlsplit(environ["ROWFIRE_PLATFORM_DSN"])
+    assert platform.hostname == "dpg-abc.frankfurt-postgres.render.com"
+    assert parse_qs(platform.query)["options"] == ["-csearch_path=rowfire_platform"]

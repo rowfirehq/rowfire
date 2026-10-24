@@ -41,12 +41,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text as sa_text
 from sqlmodel import select
 
-from . import demo_activity, engine, hosted, introspect, sources, supabase, tenancy
+from . import demo_activity, engine, hosted, ingest, introspect, sources, supabase, tenancy
 from .compile import CompileError, compile_trigger
 from .definitions import DefinitionError, Definitions
 from .definitions import loads as loads_definitions
 from .platform import crypto, oauth, store
 from .platform import db as platform_db
+from .platform import events as event_store
 from .platform.models import AuthKind, Fire, Mode, RuleState, Run, TriggerState
 
 API_PREFIX = "/api"
@@ -399,7 +400,9 @@ def _add_source(name: str, dsn: str) -> ConnectResponse:
     dsn = dsn.strip()
     try:
         kind = sources.kind_of(dsn)
-        with engine.connect(dsn, SESSION.statement_timeout_ms) as conn:
+        # Tried as this workspace's events source, if that is what it is.
+        trial = sources.pin_workspace(dsn, tenancy.current())
+        with engine.connect(trial, SESSION.statement_timeout_ms) as conn:
             info = conn.server_info()
             tables = introspect.read_schema(conn)
     except engine.EngineError as exc:
@@ -2132,6 +2135,109 @@ def _serialise_inbox_item(delivery: Any) -> dict[str, Any]:
     }
 
 
+# ------------------------------------------------------------ pushed events
+#
+# What apps running the in-app SDK sent, for the dashboard. The events arrive
+# at the separate ingest server (ingest.py); this only reads them, and manages
+# the keys apps send with.
+
+
+class IngestKeyDraft(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+def _require_app_events() -> None:
+    """Pushed events are not part of the hosted demo.
+
+    There, a visitor who could create a key could fill the demo's database
+    from anywhere; and nothing about them is meant to be shown to visitors.
+    Answered as if the routes did not exist.
+    """
+    _require_platform()
+    if hosted.enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+@router.get("/app-events/catalog")
+def app_events_catalog() -> dict[str, Any]:
+    """Operations, tables and values every recent app process reported."""
+    _require_app_events()
+    with platform_db.session_scope() as session:
+        return event_store.merged_catalog(session, workspace_id=tenancy.current())
+
+
+@router.get("/app-events/recent")
+def app_events_recent(subscription: str | None = None, limit: int = 50) -> dict[str, Any]:
+    _require_app_events()
+    with platform_db.session_scope() as session:
+        rows = event_store.recent_events(
+            session, workspace_id=tenancy.current(), subscription=subscription, limit=limit
+        )
+        total = event_store.count_events(session, workspace_id=tenancy.current())
+        return {
+            "total": total,
+            "events": [
+                {
+                    "event_id": row.event_id,
+                    "subscription": row.subscription,
+                    "operation": row.operation,
+                    "occurred_at": row.occurred_at.isoformat() if row.occurred_at else None,
+                    "received_at": row.received_at.isoformat(),
+                    "data": row.data,
+                }
+                for row in rows
+            ],
+        }
+
+
+@router.get("/app-events/losses")
+def app_events_losses(days: int = 7) -> dict[str, Any]:
+    _require_app_events()
+    with platform_db.session_scope() as session:
+        return {"losses": event_store.losses(session, workspace_id=tenancy.current(), days=days)}
+
+
+@router.get("/app-events/keys")
+def app_events_keys() -> dict[str, Any]:
+    """The keys apps send with. Never a key itself: only its prefix."""
+    _require_app_events()
+    with platform_db.session_scope() as session:
+        return {
+            "keys": [
+                {
+                    "prefix": key.key_prefix,
+                    "name": key.name,
+                    "created_at": key.created_at.isoformat(),
+                    "last_used_at": key.last_used_at.isoformat() if key.last_used_at else None,
+                    "revoked": key.revoked_at is not None,
+                }
+                for key in event_store.list_keys(session, workspace_id=tenancy.current())
+            ]
+        }
+
+
+@router.post("/app-events/keys")
+def create_app_events_key(draft: IngestKeyDraft) -> dict[str, Any]:
+    """A new key. The response is the only time the key itself is shown."""
+    _require_app_events()
+    _require_write()
+    with platform_db.session_scope() as session:
+        key, secret = event_store.create_key(session, draft.name, workspace_id=tenancy.current())
+        return {"prefix": key.key_prefix, "name": key.name, "key": secret}
+
+
+@router.delete("/app-events/keys/{prefix}")
+def revoke_app_events_key(prefix: str) -> dict[str, Any]:
+    _require_app_events()
+    _require_write()
+    try:
+        with platform_db.session_scope() as session:
+            event_store.revoke_key(session, prefix, workspace_id=tenancy.current())
+    except event_store.EventsError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"revoked": prefix}
+
+
 # ------------------------------------------------------------------- app
 
 
@@ -2160,6 +2266,8 @@ def _is_loopback(host_header: str) -> bool:
 
 
 ALLOWED_HOSTS_ENV = "ROWFIRE_ALLOWED_HOSTS"
+# Serve the ingest server's /v1 routes from this server too (see ingest.py).
+SERVE_INGEST_ENV = "ROWFIRE_SERVE_INGEST"
 
 
 def _allowed_hosts() -> frozenset[str]:
@@ -2290,9 +2398,16 @@ def create_app(session: Session | None = None, dev_origin: str | None = None) ->
     )
 
     allowed_hosts = _allowed_hosts()
+    serve_ingest = os.environ.get(SERVE_INGEST_ENV, "").strip() == "1"
 
     @app.middleware("http")
     async def guard_host(request: Request, call_next):
+        # The /v1 routes are meant to be reached from other machines, and every
+        # request needs an API key, which a page in the user's browser does
+        # not have -- the thing this guard exists to stop. Nothing else is
+        # exempt.
+        if serve_ingest and request.url.path.startswith(ingest.PATH_PREFIX):
+            return await call_next(request)
         if not _host_allowed(request.headers.get("host", ""), allowed_hosts):
             return JSONResponse(
                 status_code=421,
@@ -2304,6 +2419,9 @@ def create_app(session: Session | None = None, dev_origin: str | None = None) ->
         return await call_next(request)
 
     app.include_router(router)
+    if serve_ingest:
+        # Before the UI's catch-all route, which would otherwise answer /v1/*.
+        ingest.install(app)
     # Outside /api, at the exact URL registered on the Supabase OAuth app.
     app.add_api_route(SUPABASE_CALLBACK_PATH, supabase_callback, methods=["GET"])
 
