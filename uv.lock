@@ -885,6 +885,7 @@ dependencies = [
 dev = [
     { name = "httpx" },
     { name = "pytest" },
+    { name = "rowfire-sdk" },
     { name = "ruff" },
 ]
 
@@ -908,8 +909,14 @@ requires-dist = [
 dev = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pytest", specifier = ">=8.3" },
+    { name = "rowfire-sdk", git = "https://github.com/rowfirehq/rowfire-sdk-python" },
     { name = "ruff", specifier = ">=0.7" },
 ]
+
+[[package]]
+name = "rowfire-sdk"
+version = "0.1.0.dev0"
+source = { git = "https://github.com/rowfirehq/rowfire-sdk-python#32f04684a8bae1d775f8c1aa174d0777bae3f64d" }
 
 [[package]]
 name = "ruff"
