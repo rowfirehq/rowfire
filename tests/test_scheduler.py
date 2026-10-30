@@ -22,8 +22,9 @@ import sqlalchemy
 from sqlalchemy import text
 from sqlmodel import Session, select
 
+from rowfire import extensions
 from rowfire.definitions import loads as loads_definitions
-from rowfire.platform import actions, crypto, integrations, scheduler, store
+from rowfire.platform import actions, crypto, dispatch, integrations, scheduler, store
 from rowfire.platform.models import DeliveryStatus, Mode, RuleState, TriggerState
 
 PLATFORM_DSN = os.environ.get(
@@ -722,3 +723,49 @@ def test_a_worker_serving_every_workspace_delivers_with_each_ones_own_bindings(
         ).all()
         assert deliveries, f"nothing delivered in {channel}'s workspace"
         assert {d.rendered["body"]["channel"] for d in deliveries} == {channel}
+
+
+# ------------------------------------------------------------- extensions
+
+
+class _Limits(extensions.Extension):
+    """An extension that stops live sends, or sends under a policy of its own."""
+
+    def __init__(self, deliver: str | None = None, egress: str | None = None) -> None:
+        self._deliver, self._egress = deliver, egress
+
+    def may_deliver(self, session, workspace_id):
+        return self._deliver
+
+    def egress(self, session, workspace_id):
+        return self._egress
+
+
+def test_an_extension_can_stop_a_live_send(session) -> None:
+    workspace, master = _bound(session)
+    recorder = Recorder()
+    extensions.use([_Limits(deliver="out of deliveries")])
+    try:
+        [delivery] = _deliver(
+            session, workspace, master, mode=Mode.live, row={"id": 1}, transport=recorder
+        )
+    finally:
+        extensions.use(None)
+    assert recorder.calls == []
+    assert delivery.status is DeliveryStatus.suppressed
+    assert delivery.suppressed_reason == "out of deliveries"
+
+
+def test_an_extension_picks_the_egress_policy(session) -> None:
+    workspace, master = _bound(session, base_url="http://hooks.example.com")
+    recorder = Recorder()
+    extensions.use([_Limits(egress=dispatch.PUBLIC)])
+    try:
+        [delivery] = _deliver(
+            session, workspace, master, mode=Mode.live, row={"id": 1}, transport=recorder
+        )
+    finally:
+        extensions.use(None)
+    assert recorder.calls == []
+    assert delivery.status is DeliveryStatus.failed
+    assert "https" in (delivery.error or "")

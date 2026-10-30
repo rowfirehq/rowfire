@@ -41,7 +41,17 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text as sa_text
 from sqlmodel import select
 
-from . import demo_activity, engine, hosted, ingest, introspect, sources, supabase, tenancy
+from . import (
+    demo_activity,
+    engine,
+    extensions,
+    hosted,
+    ingest,
+    introspect,
+    sources,
+    supabase,
+    tenancy,
+)
 from .compile import CompileError, compile_trigger
 from .definitions import DefinitionError, Definitions
 from .definitions import loads as loads_definitions
@@ -270,7 +280,9 @@ def health() -> dict[str, Any]:
     degraded: str | None = None
     version: int | None = None
 
-    in_session = not (hosted.enabled() and tenancy.current() == NO_WORKSPACE)
+    realm = tenancy.realm()
+    added: dict[str, Any] = {}
+    in_session = not (realm != tenancy.LOCAL and tenancy.current() == NO_WORKSPACE)
     try:
         if not in_session:
             raise _NoSession
@@ -279,6 +291,7 @@ def health() -> dict[str, Any]:
             halted = workspace.halted_reason if workspace.halted else None
             active = store.active_definitions(session, workspace_id=tenancy.current())
             version = active[0].version if active else None
+            added = extensions.health(session, tenancy.current(), realm)
     except _NoSession:
         pass
     except Exception as exc:  # noqa: BLE001
@@ -288,15 +301,21 @@ def health() -> dict[str, Any]:
         degraded = f"control plane unreachable: {str(exc).splitlines()[0][:160]}"
 
     return {
+        # Whatever extensions add (extensions.py), under names of their own.
+        # First, so nothing they add can stand in for what Rowfire reports.
+        **added,
         "ok": True,
         "connected": in_session and _safe_has_source(),
         "allow_write": SESSION.allow_write,
         # The public demo: each visitor in a workspace of their own, which
         # the UI makes on first load (POST /api/session) and which is deleted
         # after `idle_hours` without a visit.
-        "hosted": hosted.enabled(),
+        "hosted": realm == tenancy.DEMO,
         "session": in_session,
-        "idle_hours": hosted.idle_hours() if hosted.enabled() else None,
+        # `local`, `demo`, or the name an extension gave this request. Not
+        # `demo` means no demo session is made, whatever else is true.
+        "realm": realm,
+        "idle_hours": hosted.idle_hours() if realm == tenancy.DEMO else None,
         "feedback_url": hosted.feedback_url(),
         # The version in force, or null when nothing has been stored yet --
         # which is the UI's cue to offer to generate a starting set.
@@ -308,7 +327,7 @@ def health() -> dict[str, Any]:
         "suggested_dsn": os.environ.get("ROWFIRE_DEMO_DSN") or None,
         # Whether "Simulate new activity" exists here. Only demo deployments
         # configure it; see demo_activity.
-        "demo_activity": demo_activity.configured(),
+        "demo_activity": demo_activity.configured() and _simulates_here(),
         # One-click demo sources, per engine, offered when adding a source.
         "suggested_sources": [
             {"name": name, "kind": kind, "dsn": dsn}
@@ -340,7 +359,7 @@ def start_session(request: Request, response: Response) -> dict[str, Any]:
     needs -- their copy of the sample data, the sources, the definitions --
     is made here, so the first page they see is already set up.
     """
-    if not hosted.enabled():
+    if tenancy.realm() != tenancy.DEMO:
         raise HTTPException(status_code=404, detail="Not a hosted demo.")
     _require_platform()
     if tenancy.current() != NO_WORKSPACE:
@@ -376,6 +395,13 @@ def _require_own_sources() -> None:
     and letting a stranger choose its address would make the server reach
     wherever they point it. Every visitor gets the sample sources instead.
     """
+    if tenancy.realm() not in (tenancy.LOCAL, tenancy.DEMO):
+        # A request an extension claimed, on a shared server: the same reason.
+        raise HTTPException(
+            status_code=403,
+            detail="Data sources are fixed on this server: it reads the events your app "
+            "sends with the SDK. Run Rowfire yourself to read your database directly.",
+        )
     if hosted.enabled():
         raise HTTPException(
             status_code=403,
@@ -1807,6 +1833,11 @@ def run_trigger_now(trigger_name: str) -> dict[str, Any]:
         return {"queued": True, "trigger": trigger_name}
 
 
+def _simulates_here() -> bool:
+    """Simulated activity writes to the sample data, which only these have."""
+    return tenancy.realm() in (tenancy.LOCAL, tenancy.DEMO)
+
+
 @router.post("/demo/activity")
 def simulate_activity() -> dict[str, Any]:
     """Add a burst of activity to the sample database, then poll everything.
@@ -1818,7 +1849,7 @@ def simulate_activity() -> dict[str, Any]:
     """
     _require_platform()
     _require_write()
-    if not demo_activity.configured():
+    if not demo_activity.configured() or not _simulates_here():
         raise HTTPException(status_code=404, detail="simulated activity is not configured here")
     if hosted.enabled() and not hosted.allow_simulation(tenancy.current()):
         raise HTTPException(
@@ -2151,10 +2182,12 @@ def _require_app_events() -> None:
 
     There, a visitor who could create a key could fill the demo's database
     from anywhere; and nothing about them is meant to be shown to visitors.
-    Answered as if the routes did not exist.
+    Answered as if the routes did not exist. A request an extension claimed
+    may use them: it is signed in, and the extension limits what it stores
+    (`may_store_events`).
     """
     _require_platform()
-    if hosted.enabled():
+    if hosted.enabled() and tenancy.realm() in (tenancy.LOCAL, tenancy.DEMO):
         raise HTTPException(status_code=404, detail="Not Found")
 
 
@@ -2301,6 +2334,9 @@ class _VisitorSession:
     the same context the endpoint runs in, and is copied into the thread a
     sync endpoint uses. Installed only on a hosted demo; a local install acts
     on its one workspace and never sees a cookie.
+
+    An extension may claim a request first (extensions.resolve), for a host
+    name of its own: then it, not the demo cookie, says whose request it is.
     """
 
     def __init__(self, app: Any) -> None:
@@ -2323,6 +2359,18 @@ class _VisitorSession:
             await _json(send, 403, {"detail": "Cross-site requests are refused."})
             return
 
+        claimed = await _claimed(headers)
+        if claimed is not None:
+            if claimed.workspace_id is None and path not in claimed.open_paths:
+                await _json(send, 401, {**claimed.refusal, "signin_required": True})
+                return
+            with (
+                tenancy.in_realm(claimed.realm),
+                tenancy.acting_as(claimed.workspace_id or NO_WORKSPACE),
+            ):
+                await self.app(scope, receive, send)
+            return
+
         workspace_id = await _visitor_workspace(headers)
         if workspace_id is None:
             if path not in _OPEN_WITHOUT_SESSION:
@@ -2334,7 +2382,7 @@ class _VisitorSession:
                 return
             workspace_id = NO_WORKSPACE
 
-        with tenancy.acting_as(workspace_id):
+        with tenancy.in_realm(tenancy.DEMO), tenancy.acting_as(workspace_id):
             await self.app(scope, receive, send)
 
 
@@ -2371,6 +2419,17 @@ async def _visitor_workspace(headers: dict[str, str]) -> uuid.UUID | None:
         return None
 
 
+async def _claimed(headers: dict[str, str]) -> extensions.Resolution | None:
+    """An extension's answer for this request, if any extension claims it."""
+    import anyio
+
+    if not extensions.active():
+        return None
+    # Not caught: an extension that fails to say whose request this is must
+    # not have the request served as the demo's instead.
+    return await anyio.to_thread.run_sync(extensions.resolve, headers)
+
+
 async def _json(send: Any, status: int, body: dict[str, Any]) -> None:
     import json
 
@@ -2399,6 +2458,11 @@ def create_app(session: Session | None = None, dev_origin: str | None = None) ->
 
     allowed_hosts = _allowed_hosts()
     serve_ingest = os.environ.get(SERVE_INGEST_ENV, "").strip() == "1"
+    if extensions.active() and not hosted.enabled():
+        # Requests are handed to an extension by the hosted middleware. Without
+        # it, an extension's routes would answer as the local install's one
+        # workspace, to anyone who can reach this server.
+        raise RuntimeError(f"{extensions.ENV} needs {hosted.ENABLED_ENV}=1")
 
     @app.middleware("http")
     async def guard_host(request: Request, call_next):
@@ -2419,6 +2483,8 @@ def create_app(session: Session | None = None, dev_origin: str | None = None) ->
         return await call_next(request)
 
     app.include_router(router)
+    for extra in extensions.routes():
+        app.include_router(extra)
     if serve_ingest:
         # Before the UI's catch-all route, which would otherwise answer /v1/*.
         ingest.install(app)
@@ -2426,7 +2492,9 @@ def create_app(session: Session | None = None, dev_origin: str | None = None) ->
     app.add_api_route(SUPABASE_CALLBACK_PATH, supabase_callback, methods=["GET"])
 
     if hosted.enabled():
-        # A public instance shares its sample database with every visitor.
+        # A public instance shares its sample database with every visitor,
+        # and an extension's requests (on a host name of its own) share the
+        # server with them. Extensions run only behind these locks.
         SESSION.statement_timeout_ms = min(
             SESSION.statement_timeout_ms, hosted.STATEMENT_TIMEOUT_MS
         )

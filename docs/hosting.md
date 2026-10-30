@@ -137,10 +137,24 @@ the `subscriptions:` of the definitions in Rowfire's default workspace
 way. Events older than `ROWFIRE_EVENT_RETENTION_DAYS` (30) are pruned by the
 worker; the 1 GB disk is the limit to watch.
 
+Triggers over pushed events connect as a login of their own,
+`rowfire_events_reader`, which predeploy creates and allows to read
+`ingested_event` and no other table. A trigger's SQL is checked before it
+runs; the role means the database refuses the rest of the control plane
+(stored credentials among it) even if something got past the check.
+
 **If a deploy fails,** the web service's **Events** tab shows which step.
 `rowfire cloud predeploy` names what it could not do. The likeliest is the
 database user lacking `CREATEROLE`, which the demo needs for the read-only
-role visitors' queries run as.
+roles visitors' queries and triggers over pushed events run as.
+
+**Extensions.** `ROWFIRE_EXTENSIONS` names Python modules, installed in the
+image, that plug into the running server (`src/rowfire/extensions.py`): one
+can claim requests on a host name of its own and say whose workspace they
+act on, add API routes, and limit what a workspace may store, run or send.
+They load only on a hosted instance (`ROWFIRE_HOSTED=1`), behind the same
+locks as the demo. To serve an extension's host name from this service, add
+it to `ROWFIRE_PUBLIC_HOSTNAME`, which takes a comma-separated list.
 
 **What not to change:** `ROWFIRE_MASTER_KEY`, once the demo is running.
 Every stored credential is encrypted under it. Visitors' workspaces would
