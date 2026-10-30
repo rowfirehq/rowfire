@@ -111,7 +111,7 @@ export function Integrations({
     try {
       await api.deleteIntegration(integration.id);
       await load();
-      navigate(href("integrations"), { replace: true });
+      navigate(href("actions"), { replace: true });
     } catch (exc) {
       setError(exc instanceof ApiError ? exc.message : String(exc));
     }
@@ -121,12 +121,12 @@ export function Integrations({
     <div className="rules">
       <aside className="rule-list">
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 14 }}>
-          <h2>All integrations</h2>
+          <h2>Accounts</h2>
           <button
             className="btn primary"
             onClick={() => {
               setAdding(true);
-              navigate(href("integrations"));
+              navigate(href("actions"));
             }}
           >
             Add
@@ -143,7 +143,7 @@ export function Integrations({
         {integrations.map((integration) => (
           <Link
             key={integration.id}
-            to={href("integrations", integration.name)}
+            to={href("actions", integration.name)}
             className={`rule-card${selected === integration.name ? " active" : ""}`}
             aria-current={selected === integration.name ? "page" : undefined}
             onClick={() => setAdding(false)}
@@ -197,14 +197,14 @@ export function Integrations({
             onSaved={async (name) => {
               setAdding(false);
               await load();
-              navigate(href("integrations", name));
+              navigate(href("actions", name));
             }}
           />
         )}
 
         {!adding && missing && (
           <div className="card">
-            <h2>No integration called {selected}</h2>
+            <h2>Nothing called {selected}</h2>
             <p className="hint">
               It may have been renamed or deleted. Pick one from the list, or add
               it again.
@@ -226,12 +226,16 @@ export function Integrations({
 
         {!adding && !current && !missing && !loadError && (
           <div className="card">
-            <h2>Integrations and actions</h2>
+            <h2>Actions</h2>
             <p className="hint">
-              An <strong>integration</strong> is a named connection that holds
-              credentials — your Slack workspace, your Braze account. An{" "}
-              <strong>action</strong> is one REST call on it, described as data:
-              method, path, headers and body.
+              An <strong>action</strong> is something a rule can do: post a Slack
+              message, open a Zendesk ticket, call your own API. Each is one request,
+              described as data — method, path, headers and body.
+            </p>
+            <p className="hint">
+              Actions run through an <strong>account</strong> that holds the
+              credentials: your Slack workspace, your Braze account. Add the account
+              once and every rule can use its actions.
             </p>
             <p className="hint">
               Nothing here is special-cased. Slack is defined in exactly the
@@ -309,7 +313,7 @@ function AddIntegration({
 
   return (
     <div className="card">
-      <h2>Add an integration</h2>
+      <h2>Add an account</h2>
       <p className="hint">
         Start from something we know, or describe your own API. Both produce the
         same thing.
@@ -496,7 +500,7 @@ function IntegrationDetail({
   const [editing, setEditing] = useState<ActionForm | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const here = href("integrations", integration.name);
+  const here = href("actions", integration.name);
 
   // The editor follows the URL for existing actions. A new action has no
   // name yet, so its form is local and the URL stays on the integration.
@@ -704,7 +708,7 @@ function IntegrationDetail({
                   <tr key={action.id}>
                     <td>
                       <Link
-                        to={href("integrations", integration.name, action.name)}
+                        to={href("actions", integration.name, action.name)}
                         className="ref"
                       >
                         {action.name}
@@ -720,7 +724,7 @@ function IntegrationDetail({
                     <td className="muted">{action.parameter_names.join(", ") || "nothing"}</td>
                     <td>
                       <Link
-                        to={href("integrations", integration.name, action.name)}
+                        to={href("actions", integration.name, action.name)}
                         className="linkish"
                       >
                         edit

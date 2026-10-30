@@ -720,7 +720,7 @@ def supabase_callback(request: Request) -> Response:
     from fastapi.responses import RedirectResponse
 
     def back(**params: str) -> Response:
-        redirect = RedirectResponse(f"/sources?{urlencode(params)}", status_code=303)
+        redirect = RedirectResponse(f"/connect?{urlencode(params)}", status_code=303)
         redirect.delete_cookie(_SUPABASE_FLOW_COOKIE, path="/")
         return redirect
 

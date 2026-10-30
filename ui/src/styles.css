@@ -1435,3 +1435,23 @@ pre.sql {
   font-size: 13px;
   margin-bottom: 8px;
 }
+
+/* Connect: the two ways in, side by side. */
+.way-grid {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  margin: var(--gap-2) 0 0;
+}
+
+.way-card {
+  gap: 6px;
+  padding: 16px;
+}
+
+.way-card strong {
+  font-size: 15px;
+}
+
+.way-note {
+  margin-top: 4px;
+  font-size: 12.5px;
+}

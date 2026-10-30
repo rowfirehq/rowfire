@@ -400,7 +400,7 @@ export function Triggers({ selected }: { selected: string | null }) {
               <p className="footnote" style={{ marginTop: 6 }}>
                 Written in {source.label}'s dialect
                 {source.kind === "mysql" ? " — backticks and MySQL functions are fine" : ""}.{" "}
-                <Link to={href("sources", source.name)} className="ref">
+                <Link to={href("connect", source.name)} className="ref">
                   {source.summary}
                 </Link>
               </p>

@@ -486,7 +486,7 @@ export function Start({ onConnected }: { onConnected: (has: boolean) => void }) 
           <p className="hint">No sample database is configured here.</p>
         )}
         {!hosted && (
-          <Link to={href("sources")} className="ref" style={{ marginLeft: 14 }}>
+          <Link to={href("connect")} className="ref" style={{ marginLeft: 14 }}>
             or connect your own
           </Link>
         )}
@@ -624,8 +624,8 @@ export function Start({ onConnected }: { onConnected: (has: boolean) => void }) 
           </div>
           <span className="muted" style={{ fontSize: 13 }}>
             shaped like Slack and Zendesk; connect the real ones later under{" "}
-            <Link to={href("integrations")} className="ref">
-              Integrations
+            <Link to={href("actions")} className="ref">
+              Actions
             </Link>
           </span>
         </div>

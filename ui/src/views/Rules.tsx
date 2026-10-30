@@ -349,7 +349,7 @@ export function Rules({ selected }: { selected: string | null }) {
                   <BrandIcon name={triggerSource.kind} size="sm" label="" />
                   <span className="muted">
                     reads{" "}
-                    <Link to={href("sources", triggerSource.name)} className="ref">
+                    <Link to={href("connect", triggerSource.name)} className="ref">
                       {triggerSource.name}
                     </Link>{" "}
                     · {triggerSource.label}

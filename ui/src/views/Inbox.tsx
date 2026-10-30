@@ -292,7 +292,7 @@ export function Inbox() {
             {data.installed.map((name, i) => (
               <span key={name}>
                 {i > 0 && ", "}
-                <Link to={href("integrations", name)} className="ref">
+                <Link to={href("actions", name)} className="ref">
                   {name}
                 </Link>
               </span>

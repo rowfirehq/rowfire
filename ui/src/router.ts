@@ -2,62 +2,51 @@ import { useSyncExternalStore, type MouseEvent } from "react";
 
 /* Deep links, on the History API and nothing else.
  *
- * A URL names a thing that exists: a trigger, a rule, an integration, one
- * action on it. Forms for something not yet created live at the bare list
- * path (/rules is the new-rule form), because a name like `new` is a perfectly
+ * A URL names a thing that exists: a trigger, a rule, a connection, an
+ * action. Forms for something not yet created live at the bare list path
+ * (/rules is the new-rule form), because a name like `new` is a perfectly
  * valid rule name and a reserved segment would make that rule unlinkable.
  *
  *   /start                         Get started: a first rule, end to end
+ *   /connect                       what is connected, and the choice of how
+ *                                  to connect more: an app, or a database
+ *   /connect/<name>                one connection: a database and what it can
+ *                                  see, or an app and how to send from it
+ *   /connect/<name>/<platform>     an app's steps on one platform (python, frappe)
  *   /triggers                      list, new-trigger form
  *   /triggers/<name>               one trigger
  *   /rules                         list, new-rule form
  *   /rules/<name>                  one rule
- *   /integrations                  list
- *   /integrations/<name>           one integration
- *   /integrations/<name>/actions/<action>   one action, open for editing
+ *   /actions                       what rules can do, by the account it runs through
+ *   /actions/<name>                one account (an integration: Slack, an API)
+ *   /actions/<name>/<action>       one of its actions, open for editing
  *   /activity
  *   /inbox                         what rules posted to the Demo inbox
- *   /sources                       data sources, and the form to add one
- *   /sources/<name>                one data source and what it can see
- *   /connect                       send events from an app: pick a platform
- *   /connect/<platform>            that platform's steps (python, frappe)
  *
- * `/setup` was the single-database page; it still resolves, to /sources.
+ * Older addresses still resolve: /sources and /setup to /connect, and
+ * /integrations (with its /<name>/actions/<action> form) to /actions.
  *
  * Integrations are addressed by name rather than id so a link survives the
  * integration being deleted and re-created, and reads as what it points at.
  */
 
-export type View =
-  | "start"
-  | "triggers"
-  | "rules"
-  | "integrations"
-  | "activity"
-  | "inbox"
-  | "sources"
-  | "connect";
+export type View = "start" | "connect" | "triggers" | "rules" | "actions" | "activity" | "inbox";
 
-export const VIEWS: View[] = [
-  "start",
-  "triggers",
-  "rules",
-  "integrations",
-  "activity",
-  "inbox",
-  "sources",
-  "connect",
-];
+export const VIEWS: View[] = ["start", "connect", "triggers", "rules", "actions", "activity", "inbox"];
 
 /** Old paths that still resolve, and where they went. */
-const ALIASES: Record<string, View> = { setup: "sources" };
+export const ALIASES: Record<string, View> = {
+  setup: "connect",
+  sources: "connect",
+  integrations: "actions",
+};
 
 export interface Route {
   /** null for `/`, which the shell redirects; "unknown" for anything else. */
   view: View | null | "unknown";
-  /** The trigger, rule or integration named in the path. */
+  /** The connection, trigger, rule or integration named in the path. */
   item: string | null;
-  /** The action named under an integration. */
+  /** The action named under an integration, or the platform under an app. */
   action: string | null;
 }
 
@@ -86,8 +75,10 @@ export function parse(pathname: string): Route {
   if (view === "activity" || view === "inbox" || view === "start") return { view: "unknown", item: null, action: null };
 
   if (sub === undefined) return { view, item, action: null };
-  if (view === "integrations" && sub === "actions" && action !== undefined) {
-    return { view, item, action };
+  if (view === "actions" || view === "connect") {
+    // /actions/<name>/<action>, and the older /integrations/<name>/actions/<action>.
+    if (action === undefined) return { view, item, action: sub };
+    if (view === "actions" && sub === "actions") return { view, item, action };
   }
   return { view: "unknown", item: null, action: null };
 }
@@ -95,8 +86,14 @@ export function parse(pathname: string): Route {
 export function href(view: View, item?: string | null, action?: string | null): string {
   let path = `/${view}`;
   if (item) path += `/${encodeURIComponent(item)}`;
-  if (item && action) path += `/actions/${encodeURIComponent(action)}`;
+  if (item && action) path += `/${encodeURIComponent(action)}`;
   return path;
+}
+
+/** Whether `pathname` is an older address, to be replaced by its current one. */
+export function isAlias(pathname: string): boolean {
+  const first = pathname.split("/").filter(Boolean)[0];
+  return first !== undefined && first in ALIASES;
 }
 
 /* ------------------------------------------------------------- the store */

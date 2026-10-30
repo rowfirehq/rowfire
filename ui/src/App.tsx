@@ -4,14 +4,13 @@ import { ApiError, EXPIRED_FLAG, api, type Banner } from "./api";
 import { Link } from "./components/Link";
 import { Logo } from "./components/Logo";
 import { feedbackHandled } from "./moments";
-import { href, navigate, useRoute, type View } from "./router";
+import { href, isAlias, navigate, useRoute, type View } from "./router";
 import { Live } from "./steps/Live";
 import { Connect } from "./views/Connect";
 import { Inbox } from "./views/Inbox";
 import { Integrations } from "./views/Integrations";
 import { Rules } from "./views/Rules";
 import { Start } from "./views/Start";
-import { Sources } from "./views/Sources";
 import { Triggers } from "./views/Triggers";
 
 /* One surface, seven places to be.
@@ -43,6 +42,19 @@ const PLACES: Place[] = [
     ),
   },
   {
+    id: "connect",
+    label: "Connect",
+    title: "Connect",
+    blurb: "Where Rowfire hears about events: your app sends them, or Rowfire reads your database.",
+    icon: (
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M5.5 1.5v3.5M10.5 1.5v3.5" />
+        <path d="M3.5 5h9v2.5a4.5 4.5 0 0 1-9 0z" />
+        <path d="M8 12v2.5" />
+      </svg>
+    ),
+  },
+  {
     id: "triggers",
     label: "Triggers",
     title: "Triggers",
@@ -65,10 +77,10 @@ const PLACES: Place[] = [
     ),
   },
   {
-    id: "integrations",
-    label: "Integrations",
-    title: "Integrations",
-    blurb: "Where actions are sent, and the shape of each request.",
+    id: "actions",
+    label: "Actions",
+    title: "Actions",
+    blurb: "What a rule can do — post to Slack, open a ticket, call an API — grouped by the account it runs through.",
     icon: (
       <svg viewBox="0 0 16 16" aria-hidden="true">
         <path d="M6.5 9.5a3 3 0 0 0 4.2 0l2.1-2.1a3 3 0 0 0-4.2-4.2l-.9.9" />
@@ -99,39 +111,14 @@ const PLACES: Place[] = [
       </svg>
     ),
   },
-  {
-    id: "connect",
-    label: "Your app",
-    title: "Connect your app",
-    blurb: "Send events from your app with the SDK — nothing needs access to your database.",
-    icon: (
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <rect x="2" y="2.5" width="12" height="9" rx="1.5" />
-        <path d="M5.5 14h5M8 11.5V14" />
-      </svg>
-    ),
-  },
-  {
-    id: "sources",
-    label: "Data sources",
-    title: "Data sources",
-    blurb: "The databases this reads — Postgres, MySQL or Supabase, as many as you need.",
-    icon: (
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <ellipse cx="8" cy="3.8" rx="5.5" ry="2.3" />
-        <path d="M2.5 3.8v8.4c0 1.3 2.5 2.3 5.5 2.3s5.5-1 5.5-2.3V3.8" />
-        <path d="M2.5 8c0 1.3 2.5 2.3 5.5 2.3s5.5-1 5.5-2.3" />
-      </svg>
-    ),
-  },
 ];
 
 export function App() {
   const route = useRoute();
-  // Whether any data source exists. Until one does, only Data sources opens.
+  // Whether anything is connected. Until it is, only Connect (and Get started) opens.
   const [connected, setConnected] = useState(false);
   // Nothing is drawn until the first health check answers, so a deep link
-  // does not flash the data sources screen on its way to where it points.
+  // does not flash the Connect screen on its way to where it points.
   const [ready, setReady] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [halted, setHalted] = useState<string | null>(null);
@@ -144,10 +131,7 @@ export function App() {
   } | null>(null);
   // `local`, `demo`, or an extension's: decides which places are offered.
   const [realm, setRealm] = useState("local");
-  const [ingestHere, setIngestHere] = useState(false);
   const [banner, setBanner] = useState<Banner | null>(null);
-  const [frappeAppUrl, setFrappeAppUrl] = useState<string | null>(null);
-  const [feedbackUrl, setFeedbackUrl] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -179,10 +163,7 @@ export function App() {
       setFault(health.degraded);
       setConnected(health.connected);
       setRealm(health.realm);
-      setIngestHere(health.ingest_here);
       setBanner(health.banner ?? null);
-      setFrappeAppUrl(health.frappe_app_url);
-      setFeedbackUrl(health.feedback_url);
     };
     load()
       .catch((exc) => setFault(exc instanceof ApiError ? exc.message : String(exc)))
@@ -207,12 +188,12 @@ export function App() {
   // tour, where apps send events instead.
   const sharedServer = realm !== "local" && realm !== "demo";
   const offered = PLACES.filter((place) =>
-    place.id === "start" ? !sharedServer : place.id === "connect" ? realm !== "demo" : true,
+    place.id === "start" ? !sharedServer : true,
   );
 
   // `/` has no page of its own: open where the work happens once set up,
-  // and at the data sources otherwise. `/setup` is the old name for the
-  // latter, so its address is corrected too.
+  // and at Connect or Get started otherwise. Older addresses (/sources,
+  // /integrations, /setup) are corrected to their current ones.
   useEffect(() => {
     if (ready && route.view === null) {
       // Nothing connected yet means a first visit: start with the guided
@@ -221,8 +202,11 @@ export function App() {
       navigate(href(sharedServer ? "connect" : connected && !demo ? "rules" : "start"), {
         replace: true,
       });
-    } else if (window.location.pathname.split("/")[1] === "setup") {
-      navigate(href("sources", route.item), { replace: true });
+    } else if (route.view !== "unknown" && route.view !== null && isAlias(window.location.pathname)) {
+      // An older address (/sources, /integrations, /setup): its current one,
+      // keeping the query, which Supabase's sign-in returns with.
+      const current = href(route.view, route.item, route.action) + window.location.search;
+      navigate(current, { replace: true });
     }
   }, [ready, route.view, route.item, connected, demo, sharedServer]);
 
@@ -232,17 +216,16 @@ export function App() {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
-  const reachable = (id: View) =>
-    id === "sources" || id === "start" || id === "connect" || connected;
+  const reachable = (id: View) => id === "start" || id === "connect" || connected;
   const view: View | null = route.view === null || route.view === "unknown" ? null : route.view;
   // A link into the app before a database is connected keeps its URL, shows
   // the connection form, and carries on to where it pointed once connected.
-  const shown: View | null = view && !reachable(view) ? "sources" : view;
+  const shown: View | null = view && !reachable(view) ? "connect" : view;
   const place = offered.find((p) => p.id === shown) ?? null;
 
   useEffect(() => {
     // Only name the item when its page is what is actually on screen, not
-    // while the link is held at Data sources.
+    // while the link is held at Connect.
     const named = shown === view ? [route.action, route.item] : [];
     document.title = [...named, place?.title, "Rowfire"].filter(Boolean).join(" · ");
   }, [route.action, route.item, place, shown, view]);
@@ -336,8 +319,8 @@ export function App() {
             <h2>Nothing here</h2>
             <p className="hint">
               <code>{window.location.pathname}</code> is not a page in Rowfire.{" "}
-              <Link to={href(connected ? "rules" : "sources")} className="ref">
-                Go to {connected ? "Rules" : "Data sources"}
+              <Link to={href(connected ? "rules" : "connect")} className="ref">
+                Go to {connected ? "Rules" : "Connect"}
               </Link>
               .
             </p>
@@ -368,30 +351,28 @@ export function App() {
         {ready && shown === "start" && <Start onConnected={onSourcesChanged} />}
         {ready && shown === "triggers" && <Triggers selected={route.item} />}
         {ready && shown === "rules" && <Rules selected={route.item} />}
-        {ready && shown === "integrations" && (
+        {ready && shown === "actions" && (
           <Integrations selected={route.item} action={route.action} />
         )}
         {ready && shown === "activity" && <Live />}
         {ready && shown === "inbox" && <Inbox />}
-        {ready && shown === "connect" && realm !== "demo" && (
-          <Connect
-            ingestHere={ingestHere}
-            platformId={route.item}
-            frappeAppUrl={frappeAppUrl}
-            feedbackUrl={feedbackUrl}
-          />
-        )}
-        {ready && shown === "sources" && (
+        {ready && shown === "connect" && (
           // A link held here while nothing was connected carries on to where
-          // it pointed once a source exists: `shown` follows `connected`.
-          <Sources selected={view === "sources" ? route.item : null} onChanged={onSourcesChanged} />
+          // it pointed once a connection exists: `shown` follows `connected`.
+          <Connect
+            selected={view === "connect" ? route.item : null}
+            platform={view === "connect" ? route.action : null}
+            onChanged={onSourcesChanged}
+          />
         )}
 
         <p className="footnote page-foot">
-          Read-only throughout — this never writes to the database you are
-          reading. Definitions and the connection live in the control plane: the
-          credential is stored encrypted, every change to a definition is kept as
-          a version, and rules can be promoted to live.
+          {sharedServer
+            ? "Only the events you subscribe to reach Rowfire, with only the fields you name. "
+            : "Read-only throughout — this never writes to a database it reads. "}
+          Definitions and credentials live in the control plane: credentials are stored
+          encrypted, every change to a definition is kept as a version, and rules can be
+          promoted to live.
         </p>
       </main>
     </div>

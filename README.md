@@ -114,13 +114,14 @@ rule end to end — connect the sample databases, pick an event, say how often,
 write the message, backtest it, turn it on — and delivers to the **Demo
 inbox**, so it needs no accounts. The rest of this tour does the same by hand.
 
-To connect by hand instead, open **Data sources**: click *Use the demo
-PostgreSQL database*, then **Connect**. Then **Add**, *Use the demo MySQL
-database* (it is named `support`), and **Connect** again. If you have run the
+To connect by hand instead, open **Connect** and pick *Read your database*:
+click *Use the demo PostgreSQL database*, then **Connect**. Then **Add**,
+*Read your database*, *Use the demo MySQL database* (it is named `support`),
+and **Connect** again. If you have run the
 stack before, start with `docker compose down -v` first. Otherwise the control
 plane keeps the definitions it already has instead of loading the demo's.
 
-![Data sources: a PostgreSQL and a MySQL database, and what each can see](docs/screenshots/data-sources.png)
+![Connect: a PostgreSQL and a MySQL database, and what each can see](docs/screenshots/data-sources.png)
 
 ### 1. Describe the event as SQL
 
@@ -318,12 +319,12 @@ wizard — except the first, which is one:
 | tab | for |
 | --- | --- |
 | **Get started** | A first rule on the sample data, end to end, delivering to the Demo inbox. Where a fresh install opens. |
+| **Connect** | Where events come from, two ways: your app sends them with the SDK (Python + SQLAlchemy, Frappe), or Rowfire reads a database — PostgreSQL, MySQL or Supabase, as many as you need — and shows what each can see. |
 | **Triggers** | Write the query. It runs with `LIMIT 0` as you type and reports the columns it returns — aliases and joined columns included — and you name the clock and the key from that list. |
 | **Rules** | Pick a trigger, set the cadence, backtest it, attach an action. |
-| **Integrations** | Where actions go — Slack, Zendesk, Braze or any REST API — and the shape of each request. |
+| **Actions** | What a rule can do — post to Slack, open a Zendesk ticket, call any REST API — grouped by the account (integration) it runs through, and the shape of each request. |
 | **Activity** | Modes, watermarks, what has fired, the kill switch. |
 | **Demo inbox** | What rules delivered to the Demo inbox, drawn as chat messages and tickets — shadow and live. |
-| **Data sources** | The databases it reads — PostgreSQL, MySQL or Supabase, as many as you need — and what each can see. |
 
 Every data source and integration is shown with its mark, so which database a
 trigger reads, or which system a rule talks to, is answered at a glance.
@@ -451,7 +452,7 @@ stored encrypted. There can be any number, on any of these:
 | App events | `rowfire://events` | events pushed by the in-app SDK ([below](#pushed-events-no-database-login)) |
 
 The scheme picks the engine; nothing else needs to say which it is. Add sources
-under **Data sources** in the UI, or from the CLI:
+under **Connect** in the UI, or from the CLI:
 
 ```bash
 export SUPPORT_DSN='mysql://reader:…@support-db:3306/helpdesk'
@@ -517,8 +518,8 @@ they do on Postgres; the SQL is Postgres SQL.
   open Rowfire at `localhost` or set `ROWFIRE_PUBLIC_URL` to it; anywhere
   else, the callback must be `https://` (your own address, set as
   `ROWFIRE_PUBLIC_URL`). Then set `SUPABASE_OAUTH_CLIENT_ID` and
-  `SUPABASE_OAUTH_CLIENT_SECRET`, and **Data sources** offers *Connect
-  Supabase*: approve, pick a project, done. The tokens are stored encrypted
+  `SUPABASE_OAUTH_CLIENT_SECRET`, and **Connect** → *Read your database*
+  offers *Connect Supabase*: approve, pick a project, done. The tokens are stored encrypted
   like a DSN (the source is `supabase://<ref>?grant=<id>`) and refreshed as
   they expire.
 - **Or a personal access token.** `supabase://<project ref>` with
@@ -538,7 +539,7 @@ they do on Postgres; the SQL is Postgres SQL.
 - **A demo project.** [`examples/saas/supabase.sql`](examples/saas/supabase.sql)
   sets up a Supabase project as the sample product's usage data, for the
   `free_workspace_near_quota` trigger. Set `ROWFIRE_DEMO_SUPABASE_DSN` and
-  `SUPABASE_ACCESS_TOKEN` in `.env` and **Data sources** offers it in one
+  `SUPABASE_ACCESS_TOKEN` in `.env` and **Connect** offers it in one
   click; the hosted demo gives it to every visitor (see
   [docs/hosting.md](docs/hosting.md)).
 
@@ -743,7 +744,8 @@ staging Slack are two integrations that happen to share a provider, each with
 its own credentials and its own copy of the actions. An **action** is one REST
 call on it, described entirely as data.
 
-Both are managed under **Integrations** in the UI, or over the API:
+Both are managed under **Actions** in the UI, where an integration is listed
+as an account, or over the API:
 
 ```bash
 # from the catalogue — prefills the base URL, the auth shape and the actions
