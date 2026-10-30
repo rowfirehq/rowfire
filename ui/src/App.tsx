@@ -147,6 +147,7 @@ export function App() {
   const [ingestHere, setIngestHere] = useState(false);
   const [banner, setBanner] = useState<Banner | null>(null);
   const [frappeAppUrl, setFrappeAppUrl] = useState<string | null>(null);
+  const [feedbackUrl, setFeedbackUrl] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -181,6 +182,7 @@ export function App() {
       setIngestHere(health.ingest_here);
       setBanner(health.banner ?? null);
       setFrappeAppUrl(health.frappe_app_url);
+      setFeedbackUrl(health.feedback_url);
     };
     load()
       .catch((exc) => setFault(exc instanceof ApiError ? exc.message : String(exc)))
@@ -376,6 +378,7 @@ export function App() {
             ingestHere={ingestHere}
             platformId={route.item}
             frappeAppUrl={frappeAppUrl}
+            feedbackUrl={feedbackUrl}
           />
         )}
         {ready && shown === "sources" && (

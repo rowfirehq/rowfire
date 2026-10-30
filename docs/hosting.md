@@ -247,8 +247,10 @@ can react to them without Rowfire knowing what listens (`ui/src/moments.ts`):
 | --- | --- |
 | `rowfire:moment`, `detail.name` = `first_delivery` | a live rule delivered to the Demo inbox, once per page load |
 | `rowfire:feedback` | **Give feedback** was clicked; call `preventDefault()` to handle it in place, and the link is not followed |
+| `rowfire:suggestion`, `detail` = `{kind, text}` | someone suggested something; `kind` is `platform` from **Connect your app → More platforms**. Call `preventDefault()` once it is recorded, and the page thanks them; otherwise it offers the feedback link |
 
-The rowfire.com demo uses them to show a PostHog survey, along these lines:
+The rowfire.com demo uses them to show a PostHog survey and to count
+suggested platforms, along these lines:
 
 ```html
 <script>
@@ -259,6 +261,13 @@ The rowfire.com demo uses them to show a PostHog survey, along these lines:
     if (!surveys) return;
     e.preventDefault();
     posthog.displaySurvey('<survey id>', { displayType: 'popover', ignoreConditions: true, ignoreDelay: true });
+  });
+  window.addEventListener('rowfire:suggestion', (e) => {
+    // Blocked, the snippet's stub still accepts capture() and sends nothing:
+    // leave the event unhandled, and the page offers the feedback link.
+    if (!posthog.__loaded) return;
+    posthog.capture('rowfire_' + e.detail.kind + '_suggested', { suggestion: e.detail.text });
+    e.preventDefault();
   });
 </script>
 ```
