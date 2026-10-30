@@ -24,6 +24,19 @@ if config.config_file_name is not None:
 target_metadata = SQLModel.metadata
 
 
+def include_name(name: str | None, type_: str, parent_names: object) -> bool:
+    """Compare only Rowfire's own tables.
+
+    An extension (rowfire/extensions.py) may keep tables of its own in the
+    same schema, under migrations of its own; autogenerate would otherwise
+    offer to drop them. The cost: dropping one of Rowfire's own models is not
+    detected, so that migration's DROP TABLE is written by hand.
+    """
+    if type_ == "table":
+        return name in target_metadata.tables
+    return True
+
+
 def _url() -> str:
     return config.get_main_option("sqlalchemy.url") or resolve_dsn()
 
@@ -35,6 +48,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_name=include_name,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -53,6 +67,7 @@ def run_migrations_online() -> None:
             # Catch a column whose type drifted from the model, not just
             # added and dropped columns.
             compare_type=True,
+            include_name=include_name,
         )
         with context.begin_transaction():
             context.run_migrations()

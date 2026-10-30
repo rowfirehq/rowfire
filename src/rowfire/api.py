@@ -324,7 +324,11 @@ def health() -> dict[str, Any]:
         # Non-null when the control plane is misbehaving. The UI must not make
         # a claim about stored state while this is set.
         "degraded": degraded,
-        "suggested_dsn": os.environ.get("ROWFIRE_DEMO_DSN") or None,
+        # Never on a public instance: it carries the sample login's password,
+        # and this endpoint answers anyone, signed in or not.
+        "suggested_dsn": (os.environ.get("ROWFIRE_DEMO_DSN") or None)
+        if not hosted.enabled()
+        else None,
         # Whether "Simulate new activity" exists here. Only demo deployments
         # configure it; see demo_activity.
         "demo_activity": demo_activity.configured() and _simulates_here(),
