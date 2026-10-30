@@ -1382,3 +1382,56 @@ pre.sql {
 .demo-banner > span.banner-actions {
   flex: none;
 }
+
+.platform-grid {
+  margin: var(--gap-2) 0 0;
+}
+
+.platform-card {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+
+.platform-card > span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.connect-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-4);
+}
+
+.connect-step {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.connect-step h3 {
+  font-size: 15px;
+  margin: 2px 0 10px;
+}
+
+.connect-step .hint {
+  margin: 0 0 10px;
+}
+
+.connect-step .footnote,
+.connect-step .bad-text {
+  margin-top: 10px;
+}
+
+.manage-keys {
+  margin-top: 12px;
+}
+
+.manage-keys summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 8px;
+}

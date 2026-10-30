@@ -144,6 +144,7 @@ def test_a_signed_in_request_acts_on_the_extensions_workspace(server) -> None:
     assert health["fake"] == {"workspace": workspace_id.hex}
     # Apps can send events to this same address, so Connect offers it.
     assert health["ingest_here"] is True
+    assert health["frappe_app_url"] is None
     assert health["demo_activity"] is False
     # Shared server: no database of one's own, but keys to push events with.
     assert (

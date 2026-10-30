@@ -19,7 +19,8 @@ import { useSyncExternalStore, type MouseEvent } from "react";
  *   /inbox                         what rules posted to the Demo inbox
  *   /sources                       data sources, and the form to add one
  *   /sources/<name>                one data source and what it can see
- *   /connect                       send events from an app with the SDK
+ *   /connect                       send events from an app: pick a platform
+ *   /connect/<platform>            that platform's steps (python, frappe)
  *
  * `/setup` was the single-database page; it still resolves, to /sources.
  *

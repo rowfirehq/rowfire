@@ -146,6 +146,7 @@ export function App() {
   const [realm, setRealm] = useState("local");
   const [ingestHere, setIngestHere] = useState(false);
   const [banner, setBanner] = useState<Banner | null>(null);
+  const [frappeAppUrl, setFrappeAppUrl] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -179,6 +180,7 @@ export function App() {
       setRealm(health.realm);
       setIngestHere(health.ingest_here);
       setBanner(health.banner ?? null);
+      setFrappeAppUrl(health.frappe_app_url);
     };
     load()
       .catch((exc) => setFault(exc instanceof ApiError ? exc.message : String(exc)))
@@ -369,7 +371,13 @@ export function App() {
         )}
         {ready && shown === "activity" && <Live />}
         {ready && shown === "inbox" && <Inbox />}
-        {ready && shown === "connect" && realm !== "demo" && <Connect ingestHere={ingestHere} />}
+        {ready && shown === "connect" && realm !== "demo" && (
+          <Connect
+            ingestHere={ingestHere}
+            platformId={route.item}
+            frappeAppUrl={frappeAppUrl}
+          />
+        )}
         {ready && shown === "sources" && (
           // A link held here while nothing was connected carries on to where
           // it pointed once a source exists: `shown` follows `connected`.

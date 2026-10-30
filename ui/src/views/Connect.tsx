@@ -1,17 +1,46 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 
 import { ApiError, api, type AppEvent, type AppEventKey } from "../api";
+import { BrandIcon } from "../components/BrandIcon";
+import { href, navigate } from "../router";
 
-/* Connect your app: send events with the in-app SDK instead of letting
+/* Connect your app: send events from the app itself instead of letting
  * Rowfire read a database.
  *
- * Four steps, in the order someone does them: install, make a key, paste the
- * snippet, see the first event land. The snippet is filled in with this
- * server's address and, right after it is made, the key itself -- the one
- * moment the key can be shown, so the one moment it can be pasted.
+ * First where the app runs, then only that platform's steps. Every platform
+ * needs the same two things from here -- this server's address and an API key
+ * -- and ends the same way, with the first event arriving; what differs is
+ * how the two get into the app. So the key and the wait are shared, and a
+ * platform supplies only its own steps in between.
+ *
+ * The platform is in the URL (/connect/python), so a reload, or a link sent
+ * to whoever will do the install, opens on the same steps.
  */
 
 const REFRESH_MS = 3000;
+
+interface Platform {
+  id: string;
+  name: string;
+  blurb: string;
+  icon: string;
+}
+
+const PLATFORMS: Platform[] = [
+  {
+    id: "python",
+    name: "Python + SQLAlchemy",
+    blurb: "FastAPI, Flask, Starlette, scripts and jobs",
+    icon: "python",
+  },
+  {
+    id: "frappe",
+    name: "Frappe / ERPNext",
+    blurb: "An app from the Frappe Cloud Marketplace",
+    icon: "frappe",
+  },
+];
+
 const INSTALL =
   'pip install "rowfire-sdk[sqlalchemy] @ git+https://github.com/rowfirehq/rowfire-sdk-python"';
 
@@ -24,7 +53,7 @@ function ago(iso: string | null): string {
   return `${Math.round(seconds / 86400)}d ago`;
 }
 
-function snippet(endpoint: string, key: string | null): string {
+function pythonSnippet(endpoint: string, key: string | null): string {
   const apiKey = key ? `"${key}"` : 'os.environ["ROWFIRE_API_KEY"]';
   return [
     "import os",
@@ -42,7 +71,7 @@ function snippet(endpoint: string, key: string | null): string {
   ].join("\n");
 }
 
-function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -58,7 +87,7 @@ function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) 
           .catch(() => undefined);
       }}
     >
-      {copied ? "Copied" : label}
+      {copied ? "Copied" : "Copy"}
     </button>
   );
 }
@@ -72,25 +101,215 @@ function Code({ text }: { text: string }) {
   );
 }
 
-export function Connect({ ingestHere }: { ingestHere: boolean }) {
-  const endpoint = ingestHere ? window.location.origin : null;
-  const [keys, setKeys] = useState<AppEventKey[] | null>(null);
-  const [name, setName] = useState("my-app");
-  const [fresh, setFresh] = useState<{ prefix: string; key: string } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [events, setEvents] = useState<{ total: number; events: AppEvent[] } | null>(null);
-  const [lost, setLost] = useState(0);
+function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
+  return (
+    <section className="connect-step">
+      <span className="step-n">{n}</span>
+      <div className="connect-step-body">
+        <h3>{title}</h3>
+        {children}
+      </div>
+    </section>
+  );
+}
 
-  const loadKeys = useCallback(() => {
+// ------------------------------------------------------------------ keys
+
+function useKeys() {
+  const [keys, setKeys] = useState<AppEventKey[] | null>(null);
+  const [fresh, setFresh] = useState<{ prefix: string; key: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
     api
       .appEventKeys()
-      .then((answer) => setKeys(answer.keys))
+      .then((answer) => setKeys(answer.keys.filter((key) => !key.revoked)))
       .catch((exc) => setError(exc instanceof ApiError ? exc.message : String(exc)));
   }, []);
+  useEffect(load, [load]);
 
-  useEffect(loadKeys, [loadKeys]);
+  const create = async (name: string) => {
+    setError(null);
+    try {
+      const made = await api.createAppEventKey(name);
+      setFresh({ prefix: made.prefix, key: made.key });
+      load();
+    } catch (exc) {
+      setError(exc instanceof ApiError ? exc.message : String(exc));
+    }
+  };
 
+  const revoke = async (prefix: string) => {
+    if (!window.confirm(`Revoke ${prefix}…? Apps sending with it will be refused.`)) return;
+    try {
+      await api.revokeAppEventKey(prefix);
+      setFresh((current) => (current?.prefix === prefix ? null : current));
+      load();
+    } catch (exc) {
+      setError(exc instanceof ApiError ? exc.message : String(exc));
+    }
+  };
+
+  return { keys, fresh, error, create, revoke };
+}
+
+function KeyStep({
+  n,
+  platform,
+  keys,
+}: {
+  n: number;
+  platform: Platform;
+  keys: ReturnType<typeof useKeys>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    await keys.create(platform.id);
+    setBusy(false);
+  };
+  const existing = keys.keys ?? [];
+
+  return (
+    <Step n={n} title="Create an API key">
+      {keys.fresh ? (
+        <div className="notice good">
+          <div className="notice-head">Copy it now — it won't be shown again</div>
+          <Code text={keys.fresh.key} />
+        </div>
+      ) : (
+        <form onSubmit={submit}>
+          <p className="hint">The key is shown once, right after you create it.</p>
+          <button className="btn primary" type="submit" disabled={busy}>
+            {busy ? "Creating…" : "Create key"}
+          </button>
+        </form>
+      )}
+      {keys.error && (
+        <p className="bad-text" role="alert">
+          {keys.error}
+        </p>
+      )}
+      {existing.length > 0 && (
+        <details className="manage-keys">
+          <summary>Manage keys ({existing.length})</summary>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Key</th>
+                  <th>Created</th>
+                  <th>Last used</th>
+                  <th aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody>
+                {existing.map((key) => (
+                  <tr key={key.prefix}>
+                    <td>{key.name}</td>
+                    <td className="mono">{key.prefix}…</td>
+                    <td>{ago(key.created_at)}</td>
+                    <td>{ago(key.last_used_at)}</td>
+                    <td style={{ textAlign: "right" }}>
+                      <button className="linklike" onClick={() => keys.revoke(key.prefix)}>
+                        Revoke
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+    </Step>
+  );
+}
+
+// ------------------------------------------------------------- platforms
+
+function PythonSteps({
+  endpoint,
+  keys,
+  platform,
+}: {
+  endpoint: string;
+  keys: ReturnType<typeof useKeys>;
+  platform: Platform;
+}) {
+  return (
+    <>
+      <Step n={1} title="Install the SDK">
+        <Code text={INSTALL} />
+      </Step>
+      <KeyStep n={2} platform={platform} keys={keys} />
+      <Step n={3} title="Start it when your app starts">
+        <Code text={pythonSnippet(endpoint, keys.fresh?.key ?? null)} />
+        <p className="footnote">
+          {keys.fresh
+            ? "Your new key is filled in — move it to ROWFIRE_API_KEY before you commit this. "
+            : ""}
+          Jobs name themselves with <code>with rowfire.operation("job NightlyBilling"):</code>
+        </p>
+      </Step>
+    </>
+  );
+}
+
+function FrappeSteps({
+  endpoint,
+  keys,
+  platform,
+  appUrl,
+}: {
+  endpoint: string;
+  keys: ReturnType<typeof useKeys>;
+  platform: Platform;
+  appUrl: string | null;
+}) {
+  return (
+    <>
+      <Step n={1} title="Install the Rowfire app on your site">
+        {appUrl ? (
+          <p className="hint">
+            From the Frappe Cloud Marketplace:{" "}
+            <a href={appUrl} target="_blank" rel="noreferrer">
+              Rowfire for Frappe
+            </a>
+            .
+          </p>
+        ) : (
+          <p className="hint">
+            The Marketplace listing is coming soon. You can create your key now and keep it
+            for when it's there.
+          </p>
+        )}
+      </Step>
+      <KeyStep n={2} platform={platform} keys={keys} />
+      <Step n={3} title="Paste both into the app's settings">
+        <p className="hint">In your Frappe site, open the Rowfire app's settings:</p>
+        <label className="field">Rowfire address</label>
+        <Code text={endpoint} />
+        <label className="field" style={{ marginTop: 12 }}>
+          API key
+        </label>
+        {keys.fresh ? (
+          <Code text={keys.fresh.key} />
+        ) : (
+          <p className="muted">The key from step 2.</p>
+        )}
+      </Step>
+    </>
+  );
+}
+
+// ------------------------------------------------------------------ wait
+
+function useEvents() {
+  const [events, setEvents] = useState<{ total: number; events: AppEvent[] } | null>(null);
+  const [lost, setLost] = useState(0);
   // Waiting for the first event is the point of the page, so it keeps asking.
   useEffect(() => {
     let live = true;
@@ -113,201 +332,130 @@ export function Connect({ ingestHere }: { ingestHere: boolean }) {
       window.clearInterval(timer);
     };
   }, []);
+  return { events, lost };
+}
 
-  const create = async (event: FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      const made = await api.createAppEventKey(name.trim() || "my-app");
-      setFresh({ prefix: made.prefix, key: made.key });
-      loadKeys();
-    } catch (exc) {
-      setError(exc instanceof ApiError ? exc.message : String(exc));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const revoke = async (prefix: string) => {
-    if (!window.confirm(`Revoke ${prefix}…? Apps sending with it will be refused.`)) return;
-    try {
-      await api.revokeAppEventKey(prefix);
-      if (fresh?.prefix === prefix) setFresh(null);
-      loadKeys();
-    } catch (exc) {
-      setError(exc instanceof ApiError ? exc.message : String(exc));
-    }
-  };
-
-  const active = (keys ?? []).filter((key) => !key.revoked);
-  const arrived = (events?.total ?? 0) > 0;
-
+function EventsStep({ n }: { n: number }) {
+  const { events, lost } = useEvents();
+  const total = events?.total ?? 0;
   return (
-    <div className="connect">
-      <section className="card">
-        <h2>1. Install the SDK</h2>
-        <p className="hint">
-          It runs inside your app, sees each write your ORM makes, and sends only the events
-          you subscribe to — with only the fields you name. Nothing needs access to your
-          database.
-        </p>
-        <Code text={INSTALL} />
-      </section>
-
-      <section className="card">
-        <h2>2. Create an API key</h2>
-        <p className="hint">
-          One per app is plenty. The key is shown once, here, right after you make it.
-        </p>
-        <form className="row" onSubmit={create}>
-          <input
-            type="text"
-            aria-label="Key name"
-            value={name}
-            maxLength={100}
-            onChange={(e) => setName(e.target.value)}
-            style={{ maxWidth: 260 }}
-          />
-          <button className="btn primary" type="submit" disabled={busy}>
-            {busy ? "Creating…" : "Create key"}
-          </button>
-        </form>
-
-        {fresh && (
-          <div className="notice good" style={{ marginTop: 14 }}>
-            <div className="notice-head">Your new key — copy it now, it won't be shown again</div>
-            <div className="code-block">
-              <pre>{fresh.key}</pre>
-              <CopyButton text={fresh.key} />
-            </div>
-          </div>
-        )}
-
-        {error && (
-          <p className="bad-text" role="alert" style={{ marginTop: 10 }}>
-            {error}
+    <Step n={n} title={total > 0 ? "Events are arriving" : "Send your first event"}>
+      {total === 0 ? (
+        <div className="waiting">
+          <span className="pulse" aria-hidden="true" />
+          <span className="muted">Waiting… use your app and the first event appears here.</span>
+        </div>
+      ) : (
+        <>
+          <p className="hint">
+            <strong>{total.toLocaleString()}</strong> received. Triggers read them as the{" "}
+            <code>events</code> table.
           </p>
-        )}
-
-        {active.length > 0 && (
-          <div className="table-scroll" style={{ marginTop: 14 }}>
+          <div className="table-scroll scroll-y">
             <table>
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Key</th>
-                  <th>Created</th>
-                  <th>Last used</th>
-                  <th aria-label="Actions" />
+                  <th>Received</th>
+                  <th>Subscription</th>
+                  <th>Operation</th>
+                  <th>Data</th>
                 </tr>
               </thead>
               <tbody>
-                {active.map((key) => (
-                  <tr key={key.prefix}>
-                    <td>{key.name}</td>
-                    <td className="mono">{key.prefix}…</td>
-                    <td>{ago(key.created_at)}</td>
-                    <td>{ago(key.last_used_at)}</td>
-                    <td style={{ textAlign: "right" }}>
-                      <button className="linklike" onClick={() => revoke(key.prefix)}>
-                        Revoke
-                      </button>
+                {events!.events.map((event) => (
+                  <tr key={event.event_id}>
+                    <td>{ago(event.received_at)}</td>
+                    <td className="mono">{event.subscription}</td>
+                    <td className="mono">{event.operation ?? "—"}</td>
+                    <td className="mono muted" title={JSON.stringify(event.data)}>
+                      {JSON.stringify(event.data).slice(0, 80)}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        )}
-      </section>
-
-      <section className="card">
-        <h2>3. Start it in your app</h2>
-        {endpoint ? (
-          <>
-            <p className="hint">
-              Once, at startup. {fresh ? "Your new key is already filled in" : "Put the key in "}
-              {fresh ? (
-                " — move it to an environment variable before you commit this."
-              ) : (
-                <>
-                  <code>ROWFIRE_API_KEY</code>.
-                </>
-              )}
-            </p>
-            <Code text={snippet(endpoint, fresh?.key ?? null)} />
-            <p className="footnote" style={{ marginTop: 10 }}>
-              Jobs and commands name themselves with{" "}
-              <code>with rowfire.operation("job NightlyBilling"):</code>. A subscription
-              without <code>write:</code> fires when its operation finishes successfully, so
-              it needs no ORM integration at all.
-            </p>
-          </>
-        ) : (
-          <p className="hint">
-            Apps send events to Rowfire's ingest server, which this server isn't running.
-            Start it with <code>rowfire ingest --host 0.0.0.0 --port 8100</code> and use its
-            address as the endpoint.
-          </p>
-        )}
-      </section>
-
-      <section className="card">
-        <h2>4. Watch events arrive</h2>
-        {!arrived ? (
-          <div className="waiting">
-            <span className="pulse" aria-hidden="true" />
-            <span className="muted">
-              Waiting for the first event… Use your app (or run a job) after starting it with
-              the key above.
-            </span>
-          </div>
-        ) : (
-          <>
-            <p className="hint">
-              <strong>{events!.total.toLocaleString()}</strong> event
-              {events!.total === 1 ? "" : "s"} received. A trigger reads them as the{" "}
-              <code>events</code> table, like any other query.
-            </p>
-            <div className="table-scroll scroll-y">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Received</th>
-                    <th>Subscription</th>
-                    <th>Operation</th>
-                    <th>Data</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {events!.events.map((event) => (
-                    <tr key={event.event_id}>
-                      <td>{ago(event.received_at)}</td>
-                      <td className="mono">{event.subscription}</td>
-                      <td className="mono">{event.operation ?? "—"}</td>
-                      <td className="mono muted" title={JSON.stringify(event.data)}>
-                        {JSON.stringify(event.data).slice(0, 80)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-        {lost > 0 && (
-          <p className="bad-text" style={{ marginTop: 10 }}>
-            Your apps reported {lost.toLocaleString()} event{lost === 1 ? "" : "s"} they could
-            not deliver in the last 7 days.
-          </p>
-        )}
-        <p className="footnote" style={{ marginTop: 12 }}>
-          What the SDK sends is set by <code>subscriptions:</code> in your definitions: an
-          operation, optionally a table write in it, and the fields to carry. Apps fetch them
-          from this server, so changing one needs no deploy.
+        </>
+      )}
+      {lost > 0 && (
+        <p className="bad-text">
+          Your apps reported {lost.toLocaleString()} event{lost === 1 ? "" : "s"} they couldn't
+          deliver in the last 7 days.
         </p>
+      )}
+    </Step>
+  );
+}
+
+// ------------------------------------------------------------------ page
+
+export function Connect({
+  ingestHere,
+  platformId,
+  frappeAppUrl,
+}: {
+  ingestHere: boolean;
+  platformId: string | null;
+  frappeAppUrl: string | null;
+}) {
+  const keys = useKeys();
+  const platform = PLATFORMS.find((p) => p.id === platformId) ?? null;
+  const endpoint = ingestHere ? window.location.origin : null;
+
+  return (
+    <div className="connect">
+      <section className="card">
+        <h2>Where does your app run?</h2>
+        <div className="event-grid platform-grid">
+          {PLATFORMS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className={`event-card platform-card${p.id === platform?.id ? " on" : ""}`}
+              aria-pressed={p.id === platform?.id}
+              onClick={() => navigate(href("connect", p.id))}
+            >
+              <BrandIcon name={p.icon} size="md" label="" />
+              <span>
+                <strong>{p.name}</strong>
+                <span className="muted">{p.blurb}</span>
+              </span>
+            </button>
+          ))}
+          <button type="button" className="event-card platform-card" disabled>
+            <BrandIcon name="custom" size="md" label="" />
+            <span>
+              <strong>More platforms</strong>
+              <span className="muted">Coming soon</span>
+            </span>
+          </button>
+        </div>
       </section>
+
+      {platform && !endpoint && (
+        <div className="notice warn">
+          This server doesn't receive events itself. Start Rowfire's ingest server with{" "}
+          <code>rowfire ingest --host 0.0.0.0 --port 8100</code> and use its address wherever
+          the steps below ask for this one.
+        </div>
+      )}
+
+      {platform && (
+        <section className="card connect-steps">
+          {platform.id === "python" && (
+            <PythonSteps endpoint={endpoint ?? "https://…"} keys={keys} platform={platform} />
+          )}
+          {platform.id === "frappe" && (
+            <FrappeSteps
+              endpoint={endpoint ?? "https://…"}
+              keys={keys}
+              platform={platform}
+              appUrl={frappeAppUrl}
+            />
+          )}
+          <EventsStep n={4} />
+        </section>
+      )}
     </div>
   );
 }

@@ -321,6 +321,10 @@ def health(request: Request) -> dict[str, Any]:
         # what the "Connect your app" page offers them. Never on the demo.
         "ingest_here": os.environ.get(SERVE_INGEST_ENV, "").strip() == "1"
         and realm != tenancy.DEMO,
+        # The Rowfire app's Frappe Cloud Marketplace listing, for Connect's
+        # Frappe steps. A setting rather than a constant: there is no listing
+        # yet, and when there is, linking it should not need a release.
+        "frappe_app_url": os.environ.get("ROWFIRE_FRAPPE_APP_URL", "").strip() or None,
         "idle_hours": hosted.idle_hours() if realm == tenancy.DEMO else None,
         "feedback_url": hosted.feedback_url(),
         # The version in force, or null when nothing has been stored yet --

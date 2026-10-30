@@ -539,6 +539,8 @@ export const api = {
       signin_url: string | null;
       /** Whether apps send events to this same address (/v1/*). */
       ingest_here: boolean;
+      /** The Rowfire app's Frappe Cloud Marketplace listing, once there is one. */
+      frappe_app_url: string | null;
       /** A line an extension wants across the top of every page. */
       banner?: Banner | null;
       /** Where "Give feedback" points, when the deployment sets one. */
