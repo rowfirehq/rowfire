@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 
 import { ApiError, api, type AppEvent, type AppEventKey } from "../api";
 import { BrandIcon } from "../components/BrandIcon";
-import { suggest } from "../moments";
+import { suggestHandled } from "../moments";
 import { href, navigate } from "../router";
 
 /* Connect your app: send events from the app itself instead of letting
@@ -388,81 +388,6 @@ function EventsStep({ n }: { n: number }) {
   );
 }
 
-// ------------------------------------------------------------- suggest
-
-// A head start, not a list of promises: the box takes anything.
-const IDEAS = ["Django", "Ruby on Rails", "Laravel", "Node.js", "Odoo", ".NET"];
-
-function SuggestPlatform({ feedbackUrl }: { feedbackUrl: string | null }) {
-  const [text, setText] = useState("");
-  const [result, setResult] = useState<"recorded" | "unheard" | null>(null);
-
-  const send = (value: string) => {
-    const platform = value.trim().slice(0, 100);
-    if (!platform) return;
-    setResult(suggest("platform", platform) ? "recorded" : "unheard");
-  };
-
-  if (result === "recorded") {
-    return (
-      <p className="notice good" role="status">
-        Thanks — noted. The more people ask for a platform, the sooner it comes.
-      </p>
-    );
-  }
-  if (result === "unheard") {
-    return (
-      <p className="notice" role="status">
-        {feedbackUrl ? (
-          <>
-            This page couldn't pass it on.{" "}
-            <a href={feedbackUrl} target="_blank" rel="noreferrer">
-              Tell us here
-            </a>{" "}
-            instead.
-          </>
-        ) : (
-          "This server has nowhere to send suggestions."
-        )}
-      </p>
-    );
-  }
-  return (
-    <form
-      className="suggest"
-      onSubmit={(event) => {
-        event.preventDefault();
-        send(text);
-      }}
-    >
-      <label className="field" htmlFor="suggest-platform">
-        What does your app run on?
-      </label>
-      <div className="row">
-        <input
-          id="suggest-platform"
-          type="text"
-          value={text}
-          maxLength={100}
-          placeholder="e.g. Django, Rails, Odoo…"
-          onChange={(e) => setText(e.target.value)}
-          style={{ flex: "1 1 220px", width: "auto" }}
-        />
-        <button className="btn primary" type="submit" disabled={!text.trim()}>
-          Suggest
-        </button>
-      </div>
-      <div className="chips">
-        {IDEAS.map((idea) => (
-          <button key={idea} type="button" className="chip" onClick={() => send(idea)}>
-            {idea}
-          </button>
-        ))}
-      </div>
-    </form>
-  );
-}
-
 // ------------------------------------------------------------------ page
 
 export function Connect({
@@ -505,7 +430,11 @@ export function Connect({
             type="button"
             className={`event-card platform-card${asking ? " on" : ""}`}
             aria-expanded={asking}
-            onClick={() => setAsking(!asking)}
+            onClick={() => {
+              // A listener (the demo's PostHog survey) asks in place; without
+              // one, the feedback link is the way to say it.
+              if (!suggestHandled("platform")) setAsking(!asking);
+            }}
           >
             <BrandIcon name="custom" size="md" label="" />
             <span>
@@ -514,7 +443,21 @@ export function Connect({
             </span>
           </button>
         </div>
-        {asking && <SuggestPlatform feedbackUrl={feedbackUrl} />}
+        {asking && (
+          <p className="notice" role="status">
+            {feedbackUrl ? (
+              <>
+                Which platform should be next?{" "}
+                <a href={feedbackUrl} target="_blank" rel="noreferrer">
+                  Tell us here
+                </a>
+                .
+              </>
+            ) : (
+              "Support for more platforms is on its way."
+            )}
+          </p>
+        )}
       </section>
 
       {platform && !endpoint && (

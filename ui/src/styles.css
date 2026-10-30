@@ -1435,16 +1435,3 @@ pre.sql {
   font-size: 13px;
   margin-bottom: 8px;
 }
-
-.suggest {
-  margin-top: var(--gap-3);
-  max-width: 560px;
-}
-
-.suggest .chips {
-  margin-top: 10px;
-}
-
-.chip:hover {
-  border-color: var(--series-1);
-}
