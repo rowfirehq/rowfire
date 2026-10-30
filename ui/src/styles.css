@@ -1351,3 +1351,34 @@ pre.sql {
 .demo-banner > span {
   flex: 1 1 420px;
 }
+
+/* Connect your app: commands and snippets meant to be copied. */
+.code-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--page);
+  padding: 10px 10px 10px 14px;
+}
+
+.code-block pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding-top: 7px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.code-block .btn {
+  flex: none;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.demo-banner > span.banner-actions {
+  flex: none;
+}

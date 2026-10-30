@@ -43,6 +43,7 @@ class Fake(extensions.Extension):
             workspace_id=uuid.UUID(raw) if raw else None,
             open_paths=OPEN,
             refusal={"detail": "Sign in, please."},
+            signin_url="/fake-signin",
         )
 
     def routes(self):
@@ -125,7 +126,12 @@ def test_a_claimed_host_without_sign_in_reaches_only_its_open_paths(server) -> N
     assert health["hosted"] is False
     refused = stranger.get("/api/definitions")
     assert refused.status_code == 401
-    assert refused.json() == {"detail": "Sign in, please.", "signin_required": True}
+    assert refused.json() == {
+        "detail": "Sign in, please.",
+        "signin_required": True,
+        "signin_url": "/fake-signin",
+    }
+    assert health["signin_url"] == "/fake-signin"
     assert stranger.post("/api/session").status_code == 401
 
 
@@ -136,6 +142,8 @@ def test_a_signed_in_request_acts_on_the_extensions_workspace(server) -> None:
     assert member.get("/api/ext/hello").json() == {"realm": "fake", "workspace": workspace_id.hex}
     health = member.get("/api/health").json()
     assert health["fake"] == {"workspace": workspace_id.hex}
+    # Apps can send events to this same address, so Connect offers it.
+    assert health["ingest_here"] is True
     assert health["demo_activity"] is False
     # Shared server: no database of one's own, but keys to push events with.
     assert (
@@ -151,6 +159,7 @@ def test_unclaimed_hosts_are_still_the_demo(server) -> None:
     assert visitor.post("/api/session").status_code == 200
     health = visitor.get("/api/health").json()
     assert health["realm"] == "demo" and health["hosted"] is True
+    assert health["signin_url"] is None and health["ingest_here"] is False
     assert "fake" not in health
     assert visitor.get("/api/app-events/keys").status_code == 404
 

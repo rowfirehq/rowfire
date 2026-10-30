@@ -10,7 +10,13 @@ points what it wants to do:
   * whose request this is, for a host name it serves (`resolve`): its own
     sign-in, its own cookie, the workspace that request acts on
   * extra API routes (`routes`)
-  * what to add to /api/health, for the UI to show (`health`)
+  * what to add to /api/health, for the UI to show (`health`). One key the
+    UI draws by itself: `banner`, a line across the top of every page --
+
+        {"text": "Trial: 9 days left",
+         "actions": [{"label": "Upgrade", "href": "/upgrade"},
+                     {"label": "Sign out", "post": "/api/x/logout",
+                      "then": "/signin"}]}
   * whether a workspace may store events, run its triggers or send a live
     request (`may_store_events`, `may_poll`, `may_deliver`), and which
     egress policy its requests go out under (`egress`, see dispatch.py)
@@ -43,13 +49,15 @@ class Resolution:
 
     `workspace_id` is None for someone the extension has not signed in:
     they may reach `open_paths` and nothing else, and every other request is
-    refused with `refusal` as its 401 body.
+    refused with `refusal` as its 401 body. `signin_url` is where the UI
+    sends them, a page the extension serves itself.
     """
 
     realm: str
     workspace_id: uuid.UUID | None
     open_paths: frozenset[str] = frozenset()
     refusal: dict[str, Any] = field(default_factory=lambda: {"detail": "Sign in to continue."})
+    signin_url: str | None = None
 
 
 class Extension:

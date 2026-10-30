@@ -488,6 +488,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       if (response.status === 401 && body?.session_required) {
         sessionExpired();
       }
+      // Signed out (or never signed in) on a host an extension signs people
+      // in to: its sign-in page, not an error on this one.
+      if (response.status === 401 && body?.signin_required && typeof body.signin_url === "string") {
+        window.location.assign(body.signin_url);
+      }
       if (typeof detail === "string") {
         message = detail;
       } else if (Array.isArray(detail)) {
@@ -528,6 +533,14 @@ export const api = {
       session: boolean;
       /** Hosted: hours without a visit before a workspace is deleted. */
       idle_hours: number | null;
+      /** `local`, `demo`, or the name an extension gave this request. */
+      realm: string;
+      /** Where to send someone not signed in, when an extension signs people in. */
+      signin_url: string | null;
+      /** Whether apps send events to this same address (/v1/*). */
+      ingest_here: boolean;
+      /** A line an extension wants across the top of every page. */
+      banner?: Banner | null;
       /** Where "Give feedback" points, when the deployment sets one. */
       feedback_url: string | null;
       /** The definitions version in force, or null when nothing is stored. */
@@ -540,6 +553,30 @@ export const api = {
   /** Hosted demo: make this visitor's workspace (idempotent). */
   startSession: () =>
     request<{ workspace: string; created: boolean }>("/session", { method: "POST" }),
+
+  appEventKeys: () => request<{ keys: AppEventKey[] }>("/app-events/keys"),
+
+  /** A new key. The response is the only time the key itself is shown. */
+  createAppEventKey: (name: string) =>
+    request<{ prefix: string; name: string; key: string }>("/app-events/keys", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+
+  revokeAppEventKey: (prefix: string) =>
+    request<{ revoked: string }>(`/app-events/keys/${encodeURIComponent(prefix)}`, {
+      method: "DELETE",
+    }),
+
+  appEventsRecent: (limit = 20) =>
+    request<{ total: number; events: AppEvent[] }>(`/app-events/recent?limit=${limit}`),
+
+  appEventLosses: () =>
+    request<{ losses: { day: string; reason: string; count: number }[] }>("/app-events/losses"),
+
+  /** POST to a path an extension named (a banner's action), with no body. */
+  post: (path: string) =>
+    fetch(path, { method: "POST", headers: { "content-type": "application/json" } }),
 
   sources: () =>
     request<{ sources: SourceInfo[]; default: string | null; kinds: SourceKind[] }>("/sources"),
@@ -731,3 +768,31 @@ export const api = {
       body: JSON.stringify({ rule, days, sample }),
     }),
 };
+
+/** A line across the top of every page, supplied by an extension. */
+export interface Banner {
+  text: string;
+  actions?: BannerAction[];
+}
+
+/** A link, or a POST to `post` followed by going to `then`. */
+export type BannerAction =
+  | { label: string; href: string }
+  | { label: string; post: string; then?: string };
+
+export interface AppEventKey {
+  prefix: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked: boolean;
+}
+
+export interface AppEvent {
+  event_id: string;
+  subscription: string;
+  operation: string | null;
+  occurred_at: string | null;
+  received_at: string;
+  data: Record<string, unknown>;
+}

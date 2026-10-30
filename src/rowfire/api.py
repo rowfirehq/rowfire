@@ -273,7 +273,7 @@ router = APIRouter(prefix=API_PREFIX)
 
 
 @router.get("/health")
-def health() -> dict[str, Any]:
+def health(request: Request) -> dict[str, Any]:
     import os
 
     halted: str | None = None
@@ -315,6 +315,12 @@ def health() -> dict[str, Any]:
         # `local`, `demo`, or the name an extension gave this request. Not
         # `demo` means no demo session is made, whatever else is true.
         "realm": realm,
+        # Where someone not signed in goes, when an extension signs people in.
+        "signin_url": getattr(request.state, "signin_url", None),
+        # Whether apps can send events to this same address (/v1/*), which is
+        # what the "Connect your app" page offers them. Never on the demo.
+        "ingest_here": os.environ.get(SERVE_INGEST_ENV, "").strip() == "1"
+        and realm != tenancy.DEMO,
         "idle_hours": hosted.idle_hours() if realm == tenancy.DEMO else None,
         "feedback_url": hosted.feedback_url(),
         # The version in force, or null when nothing has been stored yet --
@@ -2366,8 +2372,12 @@ class _VisitorSession:
         claimed = await _claimed(headers)
         if claimed is not None:
             if claimed.workspace_id is None and path not in claimed.open_paths:
-                await _json(send, 401, {**claimed.refusal, "signin_required": True})
+                body = {**claimed.refusal, "signin_required": True}
+                if claimed.signin_url:
+                    body["signin_url"] = claimed.signin_url
+                await _json(send, 401, body)
                 return
+            scope.setdefault("state", {})["signin_url"] = claimed.signin_url
             with (
                 tenancy.in_realm(claimed.realm),
                 tenancy.acting_as(claimed.workspace_id or NO_WORKSPACE),

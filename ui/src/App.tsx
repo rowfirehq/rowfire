@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 
-import { ApiError, EXPIRED_FLAG, api } from "./api";
+import { ApiError, EXPIRED_FLAG, api, type Banner } from "./api";
 import { Link } from "./components/Link";
 import { Logo } from "./components/Logo";
 import { feedbackHandled } from "./moments";
 import { href, navigate, useRoute, type View } from "./router";
 import { Live } from "./steps/Live";
+import { Connect } from "./views/Connect";
 import { Inbox } from "./views/Inbox";
 import { Integrations } from "./views/Integrations";
 import { Rules } from "./views/Rules";
@@ -99,6 +100,18 @@ const PLACES: Place[] = [
     ),
   },
   {
+    id: "connect",
+    label: "Your app",
+    title: "Connect your app",
+    blurb: "Send events from your app with the SDK — nothing needs access to your database.",
+    icon: (
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <rect x="2" y="2.5" width="12" height="9" rx="1.5" />
+        <path d="M5.5 14h5M8 11.5V14" />
+      </svg>
+    ),
+  },
+  {
     id: "sources",
     label: "Data sources",
     title: "Data sources",
@@ -129,10 +142,19 @@ export function App() {
     feedback: string | null;
     renewed: boolean;
   } | null>(null);
+  // `local`, `demo`, or an extension's: decides which places are offered.
+  const [realm, setRealm] = useState("local");
+  const [ingestHere, setIngestHere] = useState(false);
+  const [banner, setBanner] = useState<Banner | null>(null);
 
   useEffect(() => {
     const load = async () => {
       let health = await api.health();
+      // Someone an extension signs in, who is not signed in yet: its page.
+      if (!health.session && health.signin_url) {
+        window.location.assign(health.signin_url);
+        return;
+      }
       // A hosted visitor's first request: make their private workspace
       // (sample data, sources and definitions included) before anything else
       // asks for it.
@@ -154,11 +176,35 @@ export function App() {
       setHalted(health.halted);
       setFault(health.degraded);
       setConnected(health.connected);
+      setRealm(health.realm);
+      setIngestHere(health.ingest_here);
+      setBanner(health.banner ?? null);
     };
     load()
       .catch((exc) => setFault(exc instanceof ApiError ? exc.message : String(exc)))
       .finally(() => setReady(true));
   }, []);
+
+  // An extension's banner can count things (a trial's events, say) that
+  // change while the page is open, so it is asked again now and then.
+  const hasBanner = banner !== null;
+  useEffect(() => {
+    if (!hasBanner) return;
+    const timer = window.setInterval(() => {
+      api
+        .health()
+        .then((health) => setBanner(health.banner ?? null))
+        .catch(() => undefined);
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [hasBanner]);
+
+  // A request an extension claimed: a shared server with no sample data to
+  // tour, where apps send events instead.
+  const sharedServer = realm !== "local" && realm !== "demo";
+  const offered = PLACES.filter((place) =>
+    place.id === "start" ? !sharedServer : place.id === "connect" ? realm !== "demo" : true,
+  );
 
   // `/` has no page of its own: open where the work happens once set up,
   // and at the data sources otherwise. `/setup` is the old name for the
@@ -168,11 +214,13 @@ export function App() {
       // Nothing connected yet means a first visit: start with the guided
       // setup rather than an empty form.
       // A demo visitor arrives already connected, and is there to try it.
-      navigate(href(connected && !demo ? "rules" : "start"), { replace: true });
+      navigate(href(sharedServer ? "connect" : connected && !demo ? "rules" : "start"), {
+        replace: true,
+      });
     } else if (window.location.pathname.split("/")[1] === "setup") {
       navigate(href("sources", route.item), { replace: true });
     }
-  }, [ready, route.view, route.item, connected, demo]);
+  }, [ready, route.view, route.item, connected, demo, sharedServer]);
 
   const onSourcesChanged = useCallback((has: boolean) => setConnected(has), []);
 
@@ -180,12 +228,13 @@ export function App() {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
-  const reachable = (id: View) => id === "sources" || id === "start" || connected;
+  const reachable = (id: View) =>
+    id === "sources" || id === "start" || id === "connect" || connected;
   const view: View | null = route.view === null || route.view === "unknown" ? null : route.view;
   // A link into the app before a database is connected keeps its URL, shows
   // the connection form, and carries on to where it pointed once connected.
   const shown: View | null = view && !reachable(view) ? "sources" : view;
-  const place = PLACES.find((p) => p.id === shown) ?? null;
+  const place = offered.find((p) => p.id === shown) ?? null;
 
   useEffect(() => {
     // Only name the item when its page is what is actually on screen, not
@@ -205,7 +254,7 @@ export function App() {
         </div>
 
         <ul className="rail-nav">
-          {PLACES.map((entry) => (
+          {offered.map((entry) => (
             <li key={entry.id}>
               {reachable(entry.id) ? (
                 <Link
@@ -243,6 +292,7 @@ export function App() {
       </nav>
 
       <main className="main">
+        {banner && <BannerLine banner={banner} />}
         {demo && (
           <div className="demo-banner" role="note">
             <span>
@@ -319,6 +369,7 @@ export function App() {
         )}
         {ready && shown === "activity" && <Live />}
         {ready && shown === "inbox" && <Inbox />}
+        {ready && shown === "connect" && realm !== "demo" && <Connect ingestHere={ingestHere} />}
         {ready && shown === "sources" && (
           // A link held here while nothing was connected carries on to where
           // it pointed once a source exists: `shown` follows `connected`.
@@ -332,6 +383,39 @@ export function App() {
           a version, and rules can be promoted to live.
         </p>
       </main>
+    </div>
+  );
+}
+
+/** An extension's line across the top: text, then links or actions. */
+function BannerLine({ banner }: { banner: Banner }) {
+  return (
+    <div className="demo-banner" role="note">
+      <span>{banner.text}</span>
+      {banner.actions && banner.actions.length > 0 && (
+        <span className="row banner-actions">
+          {banner.actions.map((action) =>
+            "href" in action ? (
+              <a key={action.label} className="btn" href={action.href}>
+                {action.label}
+              </a>
+            ) : (
+              <button
+                key={action.label}
+                className="btn"
+                onClick={() => {
+                  api
+                    .post(action.post)
+                    .catch(() => undefined)
+                    .finally(() => window.location.assign(action.then ?? "/"));
+                }}
+              >
+                {action.label}
+              </button>
+            ),
+          )}
+        </span>
+      )}
     </div>
   );
 }

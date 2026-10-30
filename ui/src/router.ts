@@ -19,6 +19,7 @@ import { useSyncExternalStore, type MouseEvent } from "react";
  *   /inbox                         what rules posted to the Demo inbox
  *   /sources                       data sources, and the form to add one
  *   /sources/<name>                one data source and what it can see
+ *   /connect                       send events from an app with the SDK
  *
  * `/setup` was the single-database page; it still resolves, to /sources.
  *
@@ -33,7 +34,8 @@ export type View =
   | "integrations"
   | "activity"
   | "inbox"
-  | "sources";
+  | "sources"
+  | "connect";
 
 export const VIEWS: View[] = [
   "start",
@@ -43,6 +45,7 @@ export const VIEWS: View[] = [
   "activity",
   "inbox",
   "sources",
+  "connect",
 ];
 
 /** Old paths that still resolve, and where they went. */
