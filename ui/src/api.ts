@@ -635,6 +635,22 @@ export const api = {
 
   definitions: () => request<DefinitionsResponse>("/definitions"),
 
+  /**
+   * The definitions, or an empty set when none are stored yet: a workspace
+   * that connects an app has no schema to generate them from, and its first
+   * trigger saved here starts them.
+   */
+  definitionsOrNone: async (): Promise<DefinitionsResponse> => {
+    try {
+      return await request<DefinitionsResponse>("/definitions");
+    } catch (exc) {
+      if (exc instanceof ApiError && exc.status === 404) {
+        return { yaml_text: "", triggers: [], rules: [] };
+      }
+      throw exc;
+    }
+  },
+
   validate: () => request<{ valid: boolean; errors: string[] }>("/validate"),
 
   /** Run a draft query with LIMIT 0 and report the columns it returns. */

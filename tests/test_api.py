@@ -678,6 +678,31 @@ def test_create_and_delete_a_trigger(persistent) -> None:
     assert "big_orders" not in names
 
 
+@needs_platform
+def test_the_first_trigger_of_a_workspace_with_no_definitions_is_saved(persistent) -> None:
+    # A workspace that connects an app has no schema to generate definitions
+    # from: its first trigger, written in the composer, starts them.
+    assert persistent.get("/api/definitions").status_code == 404
+
+    response = persistent.put(
+        "/api/triggers/app_event",
+        json={
+            "name": "app_event",
+            "sql": "SELECT event_id, received_at FROM events",
+            "event_time": "received_at",
+            "key": ["event_id"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["version"] == 1
+    names = {t["name"] for t in persistent.get("/api/definitions").json()["triggers"]}
+    assert names == {"app_event"}
+
+    rule = persistent.put("/api/rules/tell_me", json={"name": "tell_me", "trigger": "app_event"})
+    assert rule.status_code == 200, rule.text
+    assert rule.json()["version"] == 2
+
+
 @needs_fixture
 @needs_platform
 def test_deleting_a_trigger_that_still_feeds_rules_is_refused(persistent) -> None:
