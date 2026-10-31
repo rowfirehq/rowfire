@@ -169,6 +169,12 @@ def poll(
     if workspace.halted:
         outcome.skipped = f"workspace halted: {workspace.halted_reason or 'no reason given'}"
         return outcome
+    from .. import extensions
+
+    refused = extensions.may_poll(session, workspace_id)
+    if refused is not None:
+        outcome.skipped = refused
+        return outcome
 
     trigger = definitions.triggers.get(state.trigger_name)
     if trigger is None:

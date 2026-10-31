@@ -52,6 +52,10 @@ const LETTERED: Record<string, { title: string; color: string; letter: string }>
   braze: { title: "Braze", color: "#3b2f63", letter: "B" },
   // A darker shade of Supabase's green, so the white letter stays legible.
   supabase: { title: "Supabase", color: "#1f7a52", letter: "S" },
+  // An app connection, and the platforms an app sends events from (Connect).
+  events: { title: "App", color: "#6e56cf", letter: "A" },
+  python: { title: "Python", color: "#3776ab", letter: "P" },
+  frappe: { title: "Frappe", color: "#0089ff", letter: "F" },
 };
 
 /** Rowfire's own Demo inbox: a tray, in the page's accent rather than a brand's. */

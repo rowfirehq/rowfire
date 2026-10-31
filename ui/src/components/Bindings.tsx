@@ -101,7 +101,7 @@ export function Bindings({
           <table>
             <thead>
               <tr>
-                <th>integration</th>
+                <th>account</th>
                 <th>action</th>
                 <th>parameters</th>
                 <th>capped per</th>
@@ -118,14 +118,14 @@ export function Bindings({
                         size="sm"
                         label=""
                       />
-                      <Link to={href("integrations", binding.integration)} className="ref">
+                      <Link to={href("actions", binding.integration)} className="ref">
                         {binding.integration}
                       </Link>
                     </span>
                   </td>
                   <td>
                     <Link
-                      to={href("integrations", binding.integration, binding.action)}
+                      to={href("actions", binding.integration, binding.action)}
                       className="ref"
                     >
                       {binding.action}
@@ -153,7 +153,7 @@ export function Bindings({
 
       {integrations.length === 0 ? (
         <div className="notice warn">
-          No integrations yet. Add one under <strong>Integrations</strong> — pick
+          No actions yet. Add an account under <strong>Actions</strong> — pick
           Slack or Braze from the catalogue, or describe your own REST API.
         </div>
       ) : (

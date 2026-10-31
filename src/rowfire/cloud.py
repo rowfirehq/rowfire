@@ -42,6 +42,11 @@ import click
 PLATFORM_SCHEMA = "rowfire_platform"
 SAMPLE_SCHEMA = "sample"
 READER_ROLE = "rowfire_demo_reader"
+# What triggers over pushed events connect as (sources.EVENTS_READER_DSN_ENV):
+# a login that can read `ingested_event` and no other table, so the
+# database itself keeps a trigger from reading stored credentials, whatever
+# gets past the query check.
+EVENTS_READER_ROLE = "rowfire_events_reader"
 MODES = ("demo", "private")
 
 
@@ -87,9 +92,13 @@ def _master_key(raw: str) -> str:
     return base64.urlsafe_b64encode(hashlib.sha256(raw.encode()).digest()).decode()
 
 
-def _reader_password(master_key: str) -> str:
-    """The demo's read-only role's password, derived: one less secret to keep."""
-    return hmac.new(master_key.encode(), b"rowfire-demo-reader", hashlib.sha256).hexdigest()
+def _reader_password(master_key: str, purpose: bytes = b"rowfire-demo-reader") -> str:
+    """A read-only role's password, derived: one less secret to keep."""
+    return hmac.new(master_key.encode(), purpose, hashlib.sha256).hexdigest()
+
+
+def _events_reader_password(master_key: str) -> str:
+    return _reader_password(master_key, b"rowfire-events-reader")
 
 
 def _examples_dir() -> Path:
@@ -150,6 +159,10 @@ def settings(env: dict[str, str] | None = None) -> dict[str, str]:
         "ROWFIRE_EGRESS": "inbox-only",
         "ROWFIRE_DEMO_TEMPLATE_SCHEMA": SAMPLE_SCHEMA,
         "ROWFIRE_DEMO_DSN": _with_user(plain, READER_ROLE, _reader_password(master_key)),
+        "ROWFIRE_EVENTS_READER_DSN": _with_query(
+            _with_user(plain, EVENTS_READER_ROLE, _events_reader_password(master_key)),
+            options=f"-csearch_path={PLATFORM_SCHEMA}",
+        ),
         "ROWFIRE_DEMO_ACTIVITY_DSN": plain,
         "ROWFIRE_DEMO_ACTIVITY_SQL": str(examples / "activity.sql"),
         "ROWFIRE_HOSTED_DEFINITIONS": str(examples / "definitions.yaml"),
@@ -198,28 +211,15 @@ def prepare_database(values: dict[str, str]) -> None:
             sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(PLATFORM_SCHEMA))
         )
 
-        exists = conn.execute(
-            "SELECT 1 FROM pg_roles WHERE rolname = %s", (READER_ROLE,)
-        ).fetchone()
-        verb = "ALTER" if exists else "CREATE"
-        try:
+        events_password = urlsplit(values["ROWFIRE_EVENTS_READER_DSN"]).password or ""
+        database = conn.execute("SELECT current_database()").fetchone()[0]  # type: ignore[index]
+        for role, secret in ((READER_ROLE, password), (EVENTS_READER_ROLE, events_password)):
+            _login_role(conn, role, secret)
             conn.execute(
-                sql.SQL("{} ROLE {} WITH LOGIN PASSWORD {}").format(
-                    sql.SQL(verb), sql.Identifier(READER_ROLE), sql.Literal(password)
+                sql.SQL("GRANT CONNECT, TEMPORARY ON DATABASE {} TO {}").format(
+                    sql.Identifier(database), sql.Identifier(role)
                 )
             )
-        except psycopg.errors.InsufficientPrivilege as exc:
-            raise CloudError(
-                "the database user cannot create roles, and the demo needs a read-only "
-                "one for visitors' queries. Grant it CREATEROLE, or create "
-                f"`{READER_ROLE}` by hand with the password `rowfire cloud reader-password` prints."
-            ) from exc
-        database = conn.execute("SELECT current_database()").fetchone()[0]  # type: ignore[index]
-        conn.execute(
-            sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
-                sql.Identifier(database), sql.Identifier(READER_ROLE)
-            )
-        )
 
         conn.execute(
             sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(SAMPLE_SCHEMA))
@@ -228,6 +228,50 @@ def prepare_database(values: dict[str, str]) -> None:
         conn.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(SAMPLE_SCHEMA)))
         for name in ("01_schema.sql", "02_seed.sql"):
             _run_sql_file(conn, examples / "db" / name)
+
+
+def _login_role(conn: object, role: str, password: str) -> None:
+    """Create `role` as a plain login with `password`, or reset its password."""
+    import psycopg
+    from psycopg import sql
+
+    exists = conn.execute(  # type: ignore[attr-defined]
+        "SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)
+    ).fetchone()
+    verb = "ALTER" if exists else "CREATE"
+    try:
+        conn.execute(  # type: ignore[attr-defined]
+            sql.SQL("{} ROLE {} WITH LOGIN PASSWORD {}").format(
+                sql.SQL(verb), sql.Identifier(role), sql.Literal(password)
+            )
+        )
+    except psycopg.errors.InsufficientPrivilege as exc:
+        raise CloudError(
+            "the database user cannot create roles, and Rowfire needs read-only ones for "
+            "the queries it runs on others' behalf. Grant it CREATEROLE, or create "
+            f"`{role}` by hand with the password `rowfire cloud reader-password` prints."
+        ) from exc
+
+
+def grant_events_reader(values: dict[str, str]) -> None:
+    """Let the events reader see `ingested_event`, and nothing else.
+
+    After migrating, since the table has to exist to be granted.
+    """
+    import psycopg
+    from psycopg import sql
+
+    with psycopg.connect(values["ROWFIRE_DEMO_ACTIVITY_DSN"], connect_timeout=10) as conn:
+        conn.execute(
+            sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                sql.Identifier(PLATFORM_SCHEMA), sql.Identifier(EVENTS_READER_ROLE)
+            )
+        )
+        conn.execute(
+            sql.SQL("GRANT SELECT ON {}.ingested_event TO {}").format(
+                sql.Identifier(PLATFORM_SCHEMA), sql.Identifier(EVENTS_READER_ROLE)
+            )
+        )
 
 
 def _migrate() -> None:
@@ -258,6 +302,7 @@ def predeploy() -> None:
     try:
         prepare_database(values)
         _migrate()
+        grant_events_reader(values)
     except CloudError as exc:
         click.echo(f"rowfire cloud: {exc}", err=True)
         sys.exit(2)
@@ -299,7 +344,9 @@ def run(args: tuple[str, ...]) -> None:
 
 
 @cloud.command(name="reader-password")
-def reader_password() -> None:
-    """Print the demo's read-only role's password, for creating it by hand."""
+@click.option("--events", is_flag=True, help=f"The password of `{EVENTS_READER_ROLE}` instead.")
+def reader_password(events: bool) -> None:
+    """Print a read-only role's password, for creating it by hand."""
     values = _apply()
-    click.echo(urlsplit(values["ROWFIRE_DEMO_DSN"]).password or "")
+    dsn = values["ROWFIRE_EVENTS_READER_DSN" if events else "ROWFIRE_DEMO_DSN"]
+    click.echo(urlsplit(dsn).password or "")

@@ -24,7 +24,8 @@ stop.
 Answers follow what the SDK's transport does with them: 2xx is delivered,
 408/429/5xx is retried later (503 with Retry-After when the database is down),
 any other 4xx is dropped and counted as lost, so it is kept for requests that
-would fail again identically. Put TLS in front of it: keys travel in a header.
+would fail again identically -- 402 among them, when an extension refuses a
+workspace more events (see extensions.py). Put TLS in front of it: keys travel in a header.
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import text
 
+from . import extensions
 from .platform import db as platform_db
 from .platform import events as event_store
 from .platform import store
@@ -124,9 +126,16 @@ def install(app: FastAPI) -> None:
 
         def work(session: Any) -> dict[str, Any]:
             workspace_id = _workspace(session, key)
+            refused = extensions.may_store_events(session, workspace_id)
+            if refused is not None:
+                # Not 429: waiting will not help until whatever refused it
+                # changes. The SDK drops a non-retryable answer and counts it
+                # as lost, which is what the app's owner then sees.
+                raise _Refused(402, f"not stored: {refused}")
             stored, duplicates = event_store.store_events(
                 session, events, workspace_id=workspace_id
             )
+            extensions.events_stored(session, workspace_id, stored)
             event_store.record_losses(session, batch.lost, workspace_id=workspace_id)
             return {"stored": stored, "duplicates": duplicates}
 

@@ -12,23 +12,35 @@ import {
 } from "../api";
 import { BrandIcon, engineLabel } from "../components/BrandIcon";
 import { Link } from "../components/Link";
+import { AppSteps } from "../components/AppSteps";
 import { SchemaBrowser } from "../components/SchemaBrowser";
 import { href, navigate } from "../router";
 import { Review } from "../steps/Review";
 
-/* Data sources: the databases Rowfire reads.
+/* Connect: where Rowfire hears about events, two ways.
  *
- * Any number of them, Postgres, MySQL or Supabase, each a named read-only
- * connection. A Supabase project can also be connected with OAuth instead of
+ *   an app     sends them itself with the in-app SDK -- a `rowfire://events`
+ *              connection, whose page shows how to send from each platform
+ *   a database Rowfire reads, Postgres, MySQL or Supabase, each a named
+ *              read-only connection
+ *
+ * Both are connections a trigger reads, so they are listed together. A Supabase project can also be connected with OAuth instead of
  * a connection string: Supabase sends the browser back here with a grant, and
  * the person picks which project to read.
  * A trigger names the one it reads; a trigger that names none reads the
  * default -- `primary`, or the first source added.
  *
- * Done once per database, then largely ignored, which is why it is its own
+ * Done once per connection, then largely ignored, which is why it is its own
  * place rather than the first step of anything: the person composing rules
  * every day should not walk past a connection string to get to their work.
+ *
+ * Which ways are offered depends on the server: a local install has both, the
+ * public demo only its sample databases, and a shared server (an extension's
+ * accounts) only apps, since it never connects to an address a stranger chose.
  */
+
+/** The name an app connection is given when the first one is made here. */
+const APP_CONNECTION = "app_events";
 
 /** Which engine a DSN points at, from its scheme -- the same rule the server applies. */
 function kindOfDsn(dsn: string): SourceKind | null {
@@ -65,18 +77,28 @@ function readSupabaseReturn(): SupabaseReturn | null {
 }
 
 /** `selected` comes from the URL: /sources/<name>. */
-export function Sources({
+export function Connect({
   selected,
+  platform,
   onChanged,
 }: {
   selected: string | null;
+  /** On an app connection, the platform whose steps are open. */
+  platform: string | null;
   /** Told whether any source exists, so the rest of the app can open up. */
   onChanged: (hasSources: boolean) => void;
 }) {
   const [items, setItems] = useState<SourceInfo[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Choosing how to connect, and then which: null until "Add" is pressed.
   const [adding, setAdding] = useState(false);
+  const [way, setWay] = useState<"app" | "database" | null>(null);
+  const [realm, setRealm] = useState("local");
+  const [ingestHere, setIngestHere] = useState(false);
+  const [frappeAppUrl, setFrappeAppUrl] = useState<string | null>(null);
+  const [feedbackUrl, setFeedbackUrl] = useState<string | null>(null);
+  const [appError, setAppError] = useState<string | null>(null);
   const [suggested, setSuggested] = useState<SuggestedSource[]>([]);
   const [showRaw, setShowRaw] = useState(false);
   // The hosted demo connects every visitor to the sample databases, and the
@@ -111,58 +133,101 @@ export function Sources({
       .health()
       .then((health) => {
         setSuggested(health.suggested_sources ?? []);
-        setFixed(health.hosted);
+        setFixed(health.realm !== "local");
+        setRealm(health.realm);
+        setIngestHere(health.ingest_here);
+        setFrappeAppUrl(health.frappe_app_url);
+        setFeedbackUrl(health.feedback_url);
       })
       .catch(() => undefined);
   }, [load]);
 
-  // Following a link to a source closes the add form.
+  // Following a link to a connection closes the add form.
   useEffect(() => {
-    if (selected !== null) setAdding(false);
+    if (selected !== null) {
+      setAdding(false);
+      setWay(null);
+    }
   }, [selected]);
+
+  // Databases only where the server may connect to any address it is given;
+  // apps anywhere but the demo, which has no app events.
+  const databasesHere = realm === "local";
+  const appsHere = realm !== "demo";
+  const appConnection = items.find((s) => s.kind === "events") ?? null;
+
+  // Where apps are the only way in (an extension's shared server), the app
+  // connection is the page: open on it rather than on an overview of one.
+  useEffect(() => {
+    if (!databasesHere && appsHere && appConnection && selected === null && !adding) {
+      navigate(href("connect", appConnection.name), { replace: true });
+    }
+  }, [databasesHere, appsHere, appConnection, selected, adding]);
+
+  const connectApp = async () => {
+    setAppError(null);
+    if (appConnection) {
+      navigate(href("connect", appConnection.name));
+      return;
+    }
+    try {
+      const added = await api.addSource(APP_CONNECTION, "rowfire://events");
+      await load();
+      navigate(href("connect", added.name));
+    } catch (exc) {
+      setAppError(exc instanceof ApiError ? exc.message : String(exc));
+    }
+  };
 
   const current = items.find((s) => s.name === selected) ?? null;
   const missing = loaded && selected !== null && current === null;
   // With nothing connected yet there is only one useful thing to show.
   // A Supabase error waits for the list too: until it loads, `first` would be
   // guessed, and a wrong guess names the new source `primary` and replaces it.
+  const choosing = !picking && loaded && selected === null && (adding || items.length === 0);
   const showAdd =
-    !fixed && !picking && (adding || (loaded && (supabaseReturn !== null || items.length === 0)));
+    databasesHere &&
+    !picking &&
+    (way === "database" || (loaded && supabaseReturn !== null));
 
   return (
     <div className="rules">
       <aside className="rule-list">
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 14 }}>
-          <h2>All data sources</h2>
-          {!fixed && (
+          <h2>Connected</h2>
+          {(databasesHere || appsHere) && (
             <button
               className="btn primary"
               onClick={() => {
                 setAdding(true);
-                navigate(href("sources"));
+                setWay(null);
+                navigate(href("connect"));
               }}
             >
               Add
             </button>
           )}
         </div>
-        {fixed && (
+        {realm === "demo" && (
           <p className="hint">
             The demo's sample databases. To connect your own, run Rowfire yourself.
           </p>
         )}
 
         {loaded && items.length === 0 && (
-          <p className="hint">None yet. Add a Postgres, MySQL or Supabase database to start.</p>
+          <p className="hint">Nothing yet. Connect an app or a database to start.</p>
         )}
 
         {items.map((source) => (
           <Link
             key={source.name}
-            to={href("sources", source.name)}
+            to={href("connect", source.name)}
             className={`rule-card${selected === source.name ? " active" : ""}`}
             aria-current={selected === source.name ? "page" : undefined}
-            onClick={() => setAdding(false)}
+            onClick={() => {
+              setAdding(false);
+              setWay(null);
+            }}
           >
             <div className="rule-card-head">
               <span className="with-icon">
@@ -205,8 +270,20 @@ export function Sources({
             onSaved={async (name) => {
               setSupabaseReturn(null);
               await load();
-              navigate(href("sources", name));
+              navigate(href("connect", name));
             }}
+          />
+        )}
+
+        {choosing && way === null && !showAdd && (
+          <Choose
+            first={items.length === 0}
+            appsHere={appsHere}
+            databasesHere={databasesHere}
+            hasApp={appConnection !== null}
+            onApp={connectApp}
+            onDatabase={() => setWay("database")}
+            error={appError}
           />
         )}
 
@@ -217,55 +294,73 @@ export function Sources({
             suggested={suggested}
             initialName={supabaseReturn?.name || null}
             supabaseError={supabaseReturn?.error ?? null}
-            onCancel={
-              items.length > 0
-                ? () => {
-                    setAdding(false);
-                    setSupabaseReturn(null);
-                  }
-                : undefined
-            }
+            onCancel={() => {
+              setWay(null);
+              setSupabaseReturn(null);
+            }}
             onSaved={async (name) => {
               setAdding(false);
+              setWay(null);
               setSupabaseReturn(null);
               await load();
-              navigate(href("sources", name));
+              navigate(href("connect", name));
             }}
           />
         )}
 
         {!showAdd && !picking && missing && (
           <div className="card">
-            <h2>No data source called {selected}</h2>
+            <h2>Nothing connected called {selected}</h2>
             <p className="hint">It may have been deleted. Pick one from the list, or add it.</p>
           </div>
         )}
 
-        {!showAdd && !picking && current && (
+        {!showAdd && !picking && current && current.kind === "events" && (
+          <AppDetail
+            key={current.name}
+            source={current}
+            fixed={fixed}
+            onDeleted={async () => {
+              await load();
+              navigate(href("connect"), { replace: true });
+            }}
+          >
+            <AppSteps
+              connection={current.name}
+              ingestHere={ingestHere}
+              platformId={platform}
+              frappeAppUrl={frappeAppUrl}
+              feedbackUrl={feedbackUrl}
+            />
+          </AppDetail>
+        )}
+
+        {!showAdd && !picking && current && current.kind !== "events" && (
           <SourceDetail
             key={current.name}
             source={current}
             fixed={fixed}
             onDeleted={async () => {
               await load();
-              navigate(href("sources"), { replace: true });
+              navigate(href("connect"), { replace: true });
             }}
           />
         )}
 
-        {!showAdd && !picking && !current && !missing && loaded && (
+        {!showAdd && !choosing && !picking && !current && !missing && loaded && (
           <>
             <div className="card">
-              <h2>Data sources</h2>
+              <h2>Connections</h2>
               <p className="hint">
-                A <strong>data source</strong> is a database Rowfire reads, through a
-                read-only connection: PostgreSQL, MySQL or Supabase, as many as you need. Each
-                trigger names the source its query runs against, so one rule can
-                watch your orders in Postgres while another watches tickets in MySQL.
+                Rowfire hears about events two ways: your <strong>app</strong> sends them
+                with the SDK, or Rowfire <strong>reads a database</strong> — PostgreSQL, MySQL
+                or Supabase — through a read-only connection. Each trigger names the
+                connection it reads, so one rule can watch orders your app sends while
+                another watches tickets in MySQL.
               </p>
               <p className="hint">
-                A trigger that names no source reads the default:{" "}
-                <code>primary</code> when there is one, or the first source you added.
+                A trigger that names none reads the default: <code>primary</code> when there
+                is one, or the first connection you added.
               </p>
             </div>
 
@@ -289,6 +384,128 @@ export function Sources({
         )}
       </section>
     </div>
+  );
+}
+
+/* --------------------------------------------------------------- choose */
+
+function Choose({
+  first,
+  appsHere,
+  databasesHere,
+  hasApp,
+  onApp,
+  onDatabase,
+  error,
+}: {
+  /** Nothing is connected yet. */
+  first: boolean;
+  appsHere: boolean;
+  databasesHere: boolean;
+  hasApp: boolean;
+  onApp: () => void;
+  onDatabase: () => void;
+  error: string | null;
+}) {
+  return (
+    <div className="card">
+      <h2>How should Rowfire hear about events?</h2>
+      <p className="hint">
+        {first ? "Pick one to start. You can add the other later." : "Add another connection."}
+      </p>
+      <div className="event-grid way-grid">
+        <button type="button" className="event-card way-card" disabled={!appsHere} onClick={onApp}>
+          <strong>Send from your app</strong>
+          <span className="muted">
+            Your app sends the events you subscribe to, with only the fields you name. Nothing
+            needs access to your database.
+          </span>
+          <span className="muted way-note">
+            {appsHere
+              ? hasApp
+                ? "Python + SQLAlchemy, Frappe — open your app connection"
+                : "Python + SQLAlchemy, Frappe, more coming"
+              : "Not in the demo, which runs on sample data"}
+          </span>
+        </button>
+        <button
+          type="button"
+          className="event-card way-card"
+          disabled={!databasesHere}
+          onClick={onDatabase}
+        >
+          <strong>Read your database</strong>
+          <span className="muted">
+            Rowfire queries it on a schedule, through a read-only login: nothing is written
+            and nothing changes in your app.
+          </span>
+          <span className="muted way-note">
+            {databasesHere
+              ? "PostgreSQL, MySQL, Supabase"
+              : "Needs Rowfire running in your own network — run it yourself to use this"}
+          </span>
+        </button>
+      </div>
+      {error && (
+        <p className="bad-text" role="alert" style={{ marginTop: 10 }}>
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ app */
+
+function AppDetail({
+  source,
+  fixed,
+  onDeleted,
+  children,
+}: {
+  source: SourceInfo;
+  fixed: boolean;
+  onDeleted: () => void;
+  children: React.ReactNode;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const inUse = source.triggers.length > 0;
+  return (
+    <>
+      <div className="card">
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div className="with-icon" style={{ gap: 14 }}>
+            <BrandIcon name="events" size="lg" label="" />
+            <div>
+              <h2 style={{ marginBottom: 2 }}>{source.name}</h2>
+              <p className="hint" style={{ margin: 0 }}>
+                Events your apps send · read by triggers as the <code>events</code> table
+              </p>
+            </div>
+          </div>
+          {!fixed && (
+            <button
+              className="btn"
+              disabled={inUse}
+              title={inUse ? "Triggers read it; delete them first" : undefined}
+              onClick={async () => {
+                setError(null);
+                try {
+                  await api.deleteSource(source.name);
+                  onDeleted();
+                } catch (exc) {
+                  setError(exc instanceof ApiError ? exc.message : String(exc));
+                }
+              }}
+            >
+              Remove
+            </button>
+          )}
+        </div>
+        {error && <p className="bad-text">{error}</p>}
+      </div>
+      {children}
+    </>
   );
 }
 
@@ -374,7 +591,7 @@ function AddSource({
 
   return (
     <div className="card">
-      <h2>{first ? "Connect your first database" : "Add a data source"}</h2>
+      <h2>{first ? "Connect your first database" : "Add a database"}</h2>
       <p className="hint">
         Point this at a read-only replica or a <code>SELECT</code>-only account.
         Every session is opened read-only — Postgres with{" "}

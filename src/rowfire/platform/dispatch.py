@@ -19,8 +19,12 @@ not this.
 from __future__ import annotations
 
 import base64
+import http.client
+import ipaddress
 import json
 import os
+import socket
+import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -40,6 +44,12 @@ INBOX_SCHEME = "inbox://"
 # `inbox-only` refuses every URL but the Demo inbox's. Unset, the policy is
 # the one described in _check_url.
 EGRESS_ENV = "ROWFIRE_EGRESS"
+
+# The policies a caller can ask for in place of the server's. `public` is for
+# a signed-up account on a shared server (accounts.py): it may call real APIs,
+# but only public https ones, and never the server's own network.
+INBOX_ONLY = "inbox-only"
+PUBLIC = "public"
 
 
 def is_inbox(url: str | None) -> bool:
@@ -78,18 +88,27 @@ class Outcome:
     retryable: bool = False
 
 
-def _check_url(url: str) -> None:
+def _policy(egress: str | None) -> str:
+    return egress or os.environ.get(EGRESS_ENV, "").strip().lower()
+
+
+def _check_url(url: str, egress: str | None = None) -> None:
     """Egress policy hook.
 
-    Currently permits everything, which is defensible while every deployment
-    is single-tenant and self-hosted -- the operator already controls the
-    network. It is a named function rather than an absent one so that adding a
-    policy later (refusing loopback, RFC1918 and 169.254.0.0/16, re-checked
-    after redirects) is a change here and nowhere else.
+    By default permits everything, which is defensible while a deployment is
+    single-tenant and self-hosted -- the operator already controls the
+    network. A shared server asks for a policy instead: `inbox-only` for the
+    public demo, `public` for signed-up accounts, whose addresses are checked
+    again when the connection is made (see _public_request).
     """
     if is_inbox(url):
         return
-    if os.environ.get(EGRESS_ENV, "").strip().lower() == "inbox-only":
+    policy = _policy(egress)
+    if policy == PUBLIC:
+        if not url.lower().startswith("https://"):
+            raise DispatchError(f"an action's URL must be https here, got {url[:40]!r}")
+        return
+    if policy == INBOX_ONLY:
         # A public instance (the hosted demo) must not be a way to make
         # requests to wherever a visitor likes: other sites, or the cloud's
         # own metadata endpoint. Only the in-process inbox is allowed.
@@ -251,17 +270,18 @@ def send(
     secret: str | None = None,
     *,
     transport: Any = None,
+    egress: str | None = None,
 ) -> Outcome:
-    """Perform the call."""
+    """Perform the call, under `egress` if given, else the server's policy."""
     url, headers = _authenticate(prepared, integration, secret)
-    _check_url(url)
+    _check_url(url, egress)
 
     if is_inbox(url):
         # Delivered by being recorded. Never handed to a transport, so the
         # inbox cannot reach the network whatever the caller passes in.
         return Outcome(status=200, body={"ok": True, "inbox": True})
 
-    caller = transport or http_request
+    caller = transport or (_public_request if _policy(egress) == PUBLIC else http_request)
     try:
         status, payload = caller(
             prepared.method, url, headers, prepared.body, integration.timeout_ms
@@ -300,6 +320,79 @@ def http_request(
         return exc.code, _maybe_json(raw)
     except urllib.error.URLError as exc:
         raise DispatchError(f"could not reach the integration: {exc.reason}") from exc
+
+
+def public_address(host: str, port: int) -> str:
+    """The address to connect to for `host`, if every one it has is public.
+
+    Refused if any of them is loopback, private, link-local (the cloud's
+    metadata endpoint among them) or otherwise not on the internet: a name
+    that resolves to both a public and a private address is a way in, not a
+    public service.
+    """
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise DispatchError(f"could not resolve {host}") from exc
+    addresses = [info[4][0] for info in infos]
+    if not addresses:
+        raise DispatchError(f"could not resolve {host}")
+    for address in addresses:
+        ip = ipaddress.ip_address(address.split("%", 1)[0])
+        if not ip.is_global or ip.is_multicast:
+            raise DispatchError(f"{host} is not a public address; refusing to call it")
+    return addresses[0]
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """An https connection to one checked address, verified as `host`.
+
+    The certificate is still checked against the host name; only the address
+    is fixed. Resolving again at connect time would let a name answer with a
+    public address for the check and a private one for the call.
+    """
+
+    def __init__(self, host: str, address: str, port: int, timeout: float) -> None:
+        super().__init__(host, port, timeout=timeout, context=ssl.create_default_context())
+        self._address = address
+
+    def connect(self) -> None:
+        sock = socket.create_connection((self._address, self.port), self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)  # type: ignore[attr-defined]
+
+
+def _public_request(
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any] | None,
+    timeout_ms: int,
+) -> tuple[int, Any]:
+    """http_request for the `public` policy: pinned, https, no redirects.
+
+    A redirect is returned as the response rather than followed, since
+    following it would reach an address nobody checked.
+    """
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    port = parts.port or 443
+    address = public_address(host, port)
+    path = parts.path or "/"
+    if parts.query:
+        path = f"{path}?{parts.query}"
+    data = json.dumps(body).encode() if body is not None else None
+    conn = _PinnedHTTPSConnection(host, address, port, timeout_ms / 1000)
+    try:
+        conn.request(method, path, body=data, headers=headers)
+        response = conn.getresponse()
+        raw = response.read().decode(errors="replace")
+        return response.status, _maybe_json(raw)
+    except (OSError, http.client.HTTPException) as exc:
+        raise DispatchError(f"could not reach the integration: {type(exc).__name__}") from exc
+    finally:
+        conn.close()
 
 
 def _maybe_json(raw: str) -> Any:

@@ -137,10 +137,24 @@ the `subscriptions:` of the definitions in Rowfire's default workspace
 way. Events older than `ROWFIRE_EVENT_RETENTION_DAYS` (30) are pruned by the
 worker; the 1 GB disk is the limit to watch.
 
+Triggers over pushed events connect as a login of their own,
+`rowfire_events_reader`, which predeploy creates and allows to read
+`ingested_event` and no other table. A trigger's SQL is checked before it
+runs; the role means the database refuses the rest of the control plane
+(stored credentials among it) even if something got past the check.
+
 **If a deploy fails,** the web service's **Events** tab shows which step.
 `rowfire cloud predeploy` names what it could not do. The likeliest is the
 database user lacking `CREATEROLE`, which the demo needs for the read-only
-role visitors' queries run as.
+roles visitors' queries and triggers over pushed events run as.
+
+**Extensions.** `ROWFIRE_EXTENSIONS` names Python modules, installed in the
+image, that plug into the running server (`src/rowfire/extensions.py`): one
+can claim requests on a host name of its own and say whose workspace they
+act on, add API routes, and limit what a workspace may store, run or send.
+They load only on a hosted instance (`ROWFIRE_HOSTED=1`), behind the same
+locks as the demo. To serve an extension's host name from this service, add
+it to `ROWFIRE_PUBLIC_HOSTNAME`, which takes a comma-separated list.
 
 **What not to change:** `ROWFIRE_MASTER_KEY`, once the demo is running.
 Every stored credential is encrypted under it. Visitors' workspaces would
@@ -233,8 +247,9 @@ can react to them without Rowfire knowing what listens (`ui/src/moments.ts`):
 | --- | --- |
 | `rowfire:moment`, `detail.name` = `first_delivery` | a live rule delivered to the Demo inbox, once per page load |
 | `rowfire:feedback` | **Give feedback** was clicked; call `preventDefault()` to handle it in place, and the link is not followed |
+| `rowfire:suggest`, `detail.kind` = `platform` | **More platforms** was clicked on **Connect your app**; call `preventDefault()` to ask in place (a survey), and the page shows nothing of its own; otherwise it offers the feedback link |
 
-The rowfire.com demo uses them to show a PostHog survey, along these lines:
+The rowfire.com demo uses them to show PostHog surveys, along these lines:
 
 ```html
 <script>
@@ -246,8 +261,18 @@ The rowfire.com demo uses them to show a PostHog survey, along these lines:
     e.preventDefault();
     posthog.displaySurvey('<survey id>', { displayType: 'popover', ignoreConditions: true, ignoreDelay: true });
   });
+  window.addEventListener('rowfire:suggest', (e) => {
+    if (!surveys || e.detail.kind !== 'platform') return;
+    e.preventDefault();
+    posthog.displaySurvey('<platform survey id>', { displayType: 'popover', ignoreConditions: true, ignoreDelay: true });
+  });
 </script>
 ```
+
+Both are surveys made in PostHog and launched with no display conditions,
+since the page decides when they appear. The platform
+one works best as a multiple choice with an open "Other": Django, Ruby on
+Rails, Laravel, Node.js, Odoo, .NET.
 
 ## What it does not do yet
 

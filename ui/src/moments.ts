@@ -9,6 +9,11 @@
  *   rowfire:feedback  "Give feedback" was clicked. A listener that handles it
  *                     in place calls preventDefault(), and the link is not
  *                     followed.
+ *   rowfire:suggest   someone wants to suggest something, detail { kind }:
+ *                     kind "platform" from Connect's "More platforms". A
+ *                     listener that asks them in place (a survey) calls
+ *                     preventDefault(); otherwise the page offers the
+ *                     feedback link.
  */
 
 const sent = new Set<string>();
@@ -22,4 +27,11 @@ export function moment(name: string): void {
 /** Whether a listener took over the feedback click. */
 export function feedbackHandled(): boolean {
   return !window.dispatchEvent(new CustomEvent("rowfire:feedback", { cancelable: true }));
+}
+
+/** Whether a listener took over asking for a suggestion of `kind`. */
+export function suggestHandled(kind: string): boolean {
+  return !window.dispatchEvent(
+    new CustomEvent("rowfire:suggest", { cancelable: true, detail: { kind } }),
+  );
 }

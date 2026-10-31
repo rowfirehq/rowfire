@@ -132,6 +132,9 @@ def test_a_visitor_without_a_session_gets_nothing_but_health(demo) -> None:
     health = stranger.get("/api/health").json()
     assert health["hosted"] is True and health["session"] is False
     assert health["connected"] is False
+    # Health answers anyone: nothing in it may name a login or its password.
+    assert health["suggested_dsn"] is None
+    assert "rowfire_ro" not in str(health)
     response = stranger.get("/api/triggers")
     assert response.status_code == 401
     assert response.json()["session_required"] is True

@@ -155,6 +155,18 @@ def _deliver_one(
         session.flush()
         return delivery
 
+    # An extension may stop a workspace's live requests (a plan's limit, say):
+    # recorded like a capped one, and not sent.
+    from .. import extensions
+
+    refused = extensions.may_deliver(session, workspace_id)
+    if refused is not None:
+        delivery.status = DeliveryStatus.suppressed
+        delivery.suppressed_reason = refused
+        session.add(delivery)
+        session.flush()
+        return delivery
+
     try:
         secret = integrations.auth_secret(integration, master_key=master_key)
     except Exception as exc:  # noqa: BLE001 -- e.g. a rotated master key
@@ -165,7 +177,19 @@ def _deliver_one(
         return delivery
 
     delivery.attempts = 1
-    outcome = dispatch.send(prepared, integration, action, secret, transport=transport)
+    try:
+        outcome = dispatch.send(
+            prepared,
+            integration,
+            action,
+            secret,
+            transport=transport,
+            egress=extensions.egress(session, workspace_id),
+        )
+    except dispatch.DispatchError as exc:
+        # Refused before anything was sent -- by the egress policy, say. A
+        # failed delivery, not a failed run: the other bindings still go.
+        outcome = dispatch.Outcome(error=str(exc))
     delivery.response_status = outcome.status
 
     if outcome.error:

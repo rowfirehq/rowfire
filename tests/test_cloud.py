@@ -114,3 +114,79 @@ def test_run_passes_any_command_through_with_the_deploys_settings(monkeypatch) -
     platform = urlsplit(environ["ROWFIRE_PLATFORM_DSN"])
     assert platform.hostname == "dpg-abc.frankfurt-postgres.render.com"
     assert parse_qs(platform.query)["options"] == ["-csearch_path=rowfire_platform"]
+
+
+def test_triggers_over_pushed_events_run_as_a_login_of_their_own() -> None:
+    values = cloud.settings(RENDER)
+    events = urlsplit(values["ROWFIRE_EVENTS_READER_DSN"])
+    assert events.username == cloud.EVENTS_READER_ROLE and events.password
+    assert events.password != urlsplit(values["ROWFIRE_DEMO_DSN"]).password
+    assert parse_qs(events.query)["options"] == ["-csearch_path=rowfire_platform"]
+
+
+CLUSTER = "postgresql://rowfire:rowfire@localhost:5434"
+
+
+def _cluster_reachable() -> bool:
+    try:
+        import psycopg
+
+        with psycopg.connect(f"{CLUSTER}/postgres", connect_timeout=3):
+            return True
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _cluster_reachable(), reason="database unavailable")
+def test_the_events_reader_can_read_events_and_no_other_table() -> None:
+    """Granted as predeploy grants it, then used as the events source uses it."""
+    import uuid
+
+    import psycopg
+
+    from rowfire import sources
+
+    name = f"rowfire_cloud_{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(f"{CLUSTER}/postgres", autocommit=True) as admin:
+        admin.execute(f'CREATE DATABASE "{name}"')
+    owner = f"{CLUSTER}/{name}"
+    workspace = uuid.uuid4()
+    try:
+        with psycopg.connect(owner, autocommit=True) as conn:
+            conn.execute("CREATE SCHEMA rowfire_platform")
+            conn.execute(
+                "CREATE TABLE rowfire_platform.ingested_event (id bigserial, workspace_id uuid, "
+                "event_id text, subscription text, operation text, occurred_at timestamptz, "
+                "received_at timestamptz DEFAULT now(), config_version text, data jsonb)"
+            )
+            conn.execute("CREATE TABLE rowfire_platform.connection (secret text)")
+            conn.execute(
+                "INSERT INTO rowfire_platform.ingested_event (workspace_id, event_id, "
+                "subscription, data) VALUES (%s, 'e1', 'refund', '{}'), (%s, 'e2', 'refund', '{}')",
+                (workspace, uuid.uuid4()),
+            )
+        values = cloud.settings({**RENDER, "DATABASE_URL": owner})
+        reader = values["ROWFIRE_EVENTS_READER_DSN"]
+        with psycopg.connect(owner, autocommit=True) as conn:
+            cloud._login_role(conn, cloud.EVENTS_READER_ROLE, urlsplit(reader).password or "")
+            conn.execute(
+                f'GRANT CONNECT, TEMPORARY ON DATABASE "{name}" TO {cloud.EVENTS_READER_ROLE}'
+            )
+        cloud.grant_events_reader({**values, "ROWFIRE_DEMO_ACTIVITY_DSN": owner})
+
+        os_env = {sources.EVENTS_READER_DSN_ENV: reader.replace("postgresql+psycopg", "postgresql")}
+        with pytest.MonkeyPatch.context() as mp:
+            for key, value in os_env.items():
+                mp.setenv(key, value)
+            dsn = sources.pin_workspace(sources.EVENTS_DSN, workspace)
+            with sources.connect(dsn) as source:
+                rows, _ = source.fetch("SELECT event_id FROM events")
+        assert [row["event_id"] for row in rows] == ["e1"]
+
+        # Past the query check, the database still says no.
+        with psycopg.connect(reader.replace("postgresql+psycopg", "postgresql")) as conn:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                conn.execute("SELECT * FROM connection")
+    finally:
+        with psycopg.connect(f"{CLUSTER}/postgres", autocommit=True) as admin:
+            admin.execute(f'DROP DATABASE "{name}" WITH (FORCE)')

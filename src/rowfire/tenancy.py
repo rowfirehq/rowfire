@@ -40,3 +40,26 @@ def acting_as(workspace_id: uuid.UUID) -> Iterator[None]:
         yield
     finally:
         _current.reset(token)
+
+
+# What kind of request this is. `local` on a local install; on a public
+# instance, `demo` for a demo visitor, or the name an extension gave the
+# requests it claimed (see extensions.Resolution) -- the same server can
+# answer more than one, told apart by the host name a request came in on.
+LOCAL = "local"
+DEMO = "demo"
+
+_realm: ContextVar[str] = ContextVar("rowfire_realm", default=LOCAL)
+
+
+def realm() -> str:
+    return _realm.get()
+
+
+@contextmanager
+def in_realm(name: str) -> Iterator[None]:
+    token = _realm.set(name)
+    try:
+        yield
+    finally:
+        _realm.reset(token)
