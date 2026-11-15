@@ -1147,7 +1147,13 @@ def _write_definitions(mutate: Any, *, created_by: str = "composer") -> dict[str
     """
     import yaml as _yaml
 
-    raw = _yaml.safe_load(_current_yaml()) or {}
+    # A workspace that has never stored any (one that connects an app rather
+    # than a database has no schema to generate a starting set from) starts
+    # from an empty document: its first trigger is its first version.
+    with platform_db.session_scope() as session:
+        active = store.active_definitions(session, workspace_id=tenancy.current())
+        current = active[0].yaml_text if active is not None else "version: 2\n"
+    raw = _yaml.safe_load(current) or {}
     raw.setdefault("triggers", {})
     raw.setdefault("rules", {})
     mutate(raw)

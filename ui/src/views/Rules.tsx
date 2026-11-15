@@ -77,7 +77,7 @@ export function Rules({ selected }: { selected: string | null }) {
 
   const load = useCallback(async () => {
     try {
-      const defs = await api.definitions();
+      const defs = await api.definitionsOrNone();
       setRules(defs.rules);
       setTriggers(defs.triggers);
       setLoaded(true);
